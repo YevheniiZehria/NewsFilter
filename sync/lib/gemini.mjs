@@ -5,6 +5,34 @@ const MODEL = 'gemini-flash-lite-latest';
 const BATCH_SIZE = 5;
 const CONTENT_CHARS = 6000;
 const PAUSE_MS = 4500; // ~13 cereri/minut, sub limita gratuită de 15 RPM
+const REQUEST_TIMEOUT_MS = 45_000;
+/** Buget total pentru Gemini într-o rulare (jobul are 20 min; restul e RSS, scraping, scrieri). */
+const TOTAL_BUDGET_MS = 8 * 60_000;
+
+/** Schema răspunsului: forțează un array de obiecte (fără `{"articles": [...]}` sau alte învelișuri). */
+const RESPONSE_SCHEMA = {
+  type: 'ARRAY',
+  items: {
+    type: 'OBJECT',
+    properties: {
+      id: { type: 'STRING' },
+      summary: { type: 'STRING' },
+      bullets: { type: 'ARRAY', items: { type: 'STRING' } },
+      tags: { type: 'ARRAY', items: { type: 'STRING' } },
+      affected_currency: { type: 'STRING', nullable: true },
+      market_sentiment: { type: 'STRING', enum: ['UP', 'DOWN', 'NEUTRAL'] },
+      market_impact_note: { type: 'STRING', nullable: true },
+      deep_dive: { type: 'STRING' }
+    },
+    required: ['id', 'summary', 'bullets', 'tags', 'market_sentiment', 'deep_dive']
+  }
+};
+
+/**
+ * Eroare HTTP = problemă a serviciului sau a configurației (429 cotă, 5xx, 400 cerere/model
+ * invalid, 401/403 cheie), nu a articolelor → oprim restul loturilor fără a consuma încercări.
+ */
+const isFatal = (e) => typeof e?.status === 'number';
 
 /** Singurele perechi acceptate (identice cu cele din aplicație: `MarketPairs.all`). */
 const MARKET_PAIRS = ['EUR/RON', 'USD/RON', 'BTC/USD'];
@@ -67,15 +95,30 @@ async function digestBatch(apiKey, batch) {
     `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`,
     {
       method: 'POST',
-      timeoutMs: 90_000,
+      timeoutMs: REQUEST_TIMEOUT_MS,
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
       body: JSON.stringify({
         contents: [{ parts: [{ text: buildPrompt(batch) }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 8192, responseMimeType: 'application/json' }
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 8192,
+          responseMimeType: 'application/json',
+          responseSchema: RESPONSE_SCHEMA,
+          // Fără „gândire”: tokenii de raționament ar consuma din maxOutputTokens și ar tăia JSON-ul.
+          thinkingConfig: { thinkingBudget: 0 }
+        }
       })
     }
   );
   const data = await res.json();
+  const blockReason = data?.promptFeedback?.blockReason;
+  const finishReason = data?.candidates?.[0]?.finishReason;
+  if (blockReason || finishReason === 'SAFETY') {
+    const err = new Error(`blocat de filtrele de siguranță (${blockReason || finishReason})`);
+    err.safety = true;
+    throw err;
+  }
+  if (finishReason === 'MAX_TOKENS') throw new Error('răspuns tăiat (MAX_TOKENS)');
   const raw = (data?.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/^```(?:json)?|```$/g, '').trim();
   const parsed = JSON.parse(raw);
   const byId = new Map((Array.isArray(parsed) ? parsed : []).map((p) => [String(p?.id), p]));
@@ -84,24 +127,60 @@ async function digestBatch(apiKey, batch) {
     const p = byId.get(article.id);
     if (p && applyDigest(article, p)) ok++;
   }
+  if (ok === 0) console.warn(`Gemini: niciun articol valid în răspuns (${byId.size} obiecte primite)`);
   return ok;
 }
 
 /**
  * Smart Digest pentru articole: rezumat + idei cheie + etichete + impact valutar + aprofundare.
- * Erorile (cotă, JSON invalid) lasă articolul neprocesat (`aiProcessed` rămâne false) → reîncercat
- * la rularea următoare.
+ * Erorile lasă articolul neprocesat (`aiProcessed` rămâne false) → reîncercat la rularea următoare.
+ *
+ * @return `{ ok, attempted }` — `attempted` = articolele pentru care Gemini a dat un răspuns real
+ * (valid sau nu). Cota epuizată (429), erorile 5xx, timeout-ul și bugetul de timp NU consumă
+ * încercări: articolele respective nu apar în `attempted`.
  */
 export async function digestArticles(apiKey, articles) {
+  const started = Date.now();
+  const attempted = new Set();
   let ok = 0;
+  let calls = 0;
+
+  const run = async (batch) => {
+    if (calls++ > 0) await sleep(PAUSE_MS);
+    ok += await digestBatch(apiKey, batch);
+    batch.forEach((a) => attempted.add(a));
+  };
+
   for (let i = 0; i < articles.length; i += BATCH_SIZE) {
-    if (i > 0) await sleep(PAUSE_MS);
+    if (Date.now() - started > TOTAL_BUDGET_MS) {
+      console.warn(`Gemini: buget de timp depășit, ${articles.length - i} articole rămân pentru rularea următoare`);
+      break;
+    }
     const batch = articles.slice(i, i + BATCH_SIZE);
     try {
-      ok += await digestBatch(apiKey, batch);
+      await run(batch);
     } catch (e) {
+      if (isFatal(e)) {
+        console.warn(`Gemini: oprit (${e.message}); restul articolelor rămân pentru rularea următoare`);
+        break;
+      }
+      if (e.safety && batch.length > 1) {
+        // Un singur articol sensibil (război, crimă) blochează tot lotul → le încercăm pe rând.
+        console.warn(`Gemini: lot ${e.message}, reîncerc articol cu articol`);
+        for (const article of batch) {
+          try {
+            await run([article]);
+          } catch (e2) {
+            if (isFatal(e2)) return { ok, attempted };
+            if (e2.safety) attempted.add(article);
+            console.warn(`Gemini: articol ${article.id} eșuat (${e2.message})`);
+          }
+        }
+        continue;
+      }
+      if (e.name !== 'TimeoutError' && e.name !== 'AbortError') batch.forEach((a) => attempted.add(a));
       console.warn(`Gemini: lot eșuat (${e.message})`);
     }
   }
-  return ok;
+  return { ok, attempted };
 }
