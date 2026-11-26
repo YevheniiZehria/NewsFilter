@@ -4,7 +4,6 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -51,11 +50,9 @@ class NetworkMonitor @Inject constructor(
             }
         }
 
-        val request = NetworkRequest.Builder()
-            .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-            .build()
-
-        connectivityManager.registerNetworkCallback(request, callback)
+        // Doar rețeaua implicită: cu mai multe rețele (Wi-Fi + date mobile), pierderea uneia
+        // secundare nu mai marchează dispozitivul „offline” cât timp cealaltă funcționează.
+        connectivityManager.registerDefaultNetworkCallback(callback)
 
         // Emite starea inițială sincron
         val activeNetwork = connectivityManager.activeNetwork

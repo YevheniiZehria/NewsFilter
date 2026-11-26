@@ -55,6 +55,9 @@ interface NewsRepository {
     /** Un articol individual din cache-ul local. */
     suspend fun getArticleById(id: String): NewsArticle?
 
+    /** Articolul din cache, observat (null = nu există / a fost șters). */
+    fun observeArticle(id: String): Flow<NewsArticle?>
+
     /** Șterge din cache articolele nesincronizate de [daysOld] zile (favoritele rămân). */
     suspend fun clearOldCache(daysOld: Int = 7)
 }

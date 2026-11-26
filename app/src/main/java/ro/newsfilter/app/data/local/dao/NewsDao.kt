@@ -43,6 +43,10 @@ interface NewsDao {
     @Query("SELECT * FROM news WHERE id = :articleId LIMIT 1")
     suspend fun getArticleById(articleId: String): NewsEntity?
 
+    /** Un articol după ID, observat (ecranul de detaliu primește analiza AI dacă sosește între timp). */
+    @Query("SELECT * FROM news WHERE id = :articleId LIMIT 1")
+    fun observeArticleById(articleId: String): Flow<NewsEntity?>
+
     /** Articolele existente din lista dată (pentru a păstra stările locale la sincronizare). */
     @Query("SELECT * FROM news WHERE id IN (:ids)")
     suspend fun getArticlesByIds(ids: List<String>): List<NewsEntity>

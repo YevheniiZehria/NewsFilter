@@ -35,7 +35,7 @@ class OnboardingViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(OnboardingUiState())
     val uiState: StateFlow<OnboardingUiState> = _uiState.asStateFlow()
 
-    val availableCategories = Category.entries
+    val availableCategories = Category.selectable
 
     /**
      * Comută selecția unei categorii (multi-select).

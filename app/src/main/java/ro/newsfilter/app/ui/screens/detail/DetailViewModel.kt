@@ -62,24 +62,37 @@ class DetailViewModel @Inject constructor(
         loadArticle()
     }
 
+    /**
+     * Observă articolul din Room: dacă rezumatul AI sau aprofundarea sosesc (sincronizare în
+     * fundal) cât timp ecranul e deschis, apar imediat. Prima emisie marchează articolul citit.
+     */
     private fun loadArticle() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            val article = newsRepository.getArticleById(articleId)
-            if (article == null) {
-                _uiState.update { it.copy(isLoading = false, error = "Articolul nu a fost găsit.") }
-                return@launch
+            var first = true
+            newsRepository.observeArticle(articleId).collect { article ->
+                if (article == null) {
+                    // Păstrăm articolul deja afișat (ex. cache golit între timp).
+                    if (_uiState.value.article == null) {
+                        _uiState.update { it.copy(isLoading = false, error = "Articolul nu a fost găsit.") }
+                    }
+                    return@collect
+                }
+                _uiState.update {
+                    it.copy(
+                        article = article,
+                        isLoading = false,
+                        error = null,
+                        feedbackPositive = it.feedbackPositive ?: article.userVote,
+                        isFeedbackSent = it.isFeedbackSent || article.userVote != null,
+                        deepDive = it.deepDive ?: article.deepDive
+                    )
+                }
+                if (first) {
+                    first = false
+                    newsRepository.markAsRead(articleId)
+                }
             }
-            _uiState.update {
-                it.copy(
-                    article = article,
-                    isLoading = false,
-                    feedbackPositive = article.userVote,
-                    isFeedbackSent = article.userVote != null,
-                    deepDive = article.deepDive
-                )
-            }
-            newsRepository.markAsRead(articleId)
         }
     }
 

@@ -54,7 +54,7 @@ class SettingsViewModel @Inject constructor(
             initialValue = loadedPreferences.value ?: UserPreferences()
         )
 
-    val allCategories = Category.entries
+    val allCategories = Category.selectable
 
     fun toggleCategory(slug: String) {
         val currentCategories = preferences.value.selectedCategories.toMutableSet()

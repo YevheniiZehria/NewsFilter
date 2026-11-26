@@ -1,5 +1,7 @@
 package ro.newsfilter.app.domain.model
 
+import androidx.compose.runtime.Immutable
+
 /**
  * Model de domeniu pur pentru un articol de știri.
  * Este independent de sursa de date (rețea sau bază de date locală).
@@ -25,6 +27,7 @@ package ro.newsfilter.app.domain.model
  * @property marketSentiment Direcția estimată a perechii
  * @property marketImpactNote Explicația AI într-o propoziție
  */
+@Immutable // listele nu se modifică după creare → Compose poate sări recompozițiile cardurilor
 data class NewsArticle(
     val id: String,
     val title: String,

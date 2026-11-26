@@ -11,6 +11,7 @@ import com.google.android.gms.tasks.Task
 import androidx.room.withTransaction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withTimeoutOrNull
@@ -67,7 +68,7 @@ class NewsRepositoryImpl @Inject constructor(
      */
     override suspend fun syncFeed(categories: List<String>, maxMinutes: Int) {
         ensureOnline()
-        requireUid()
+        val uid = requireUid()
         val articles = firestore.collection(FirestorePaths.ARTICLES)
         val lastSync = preferences.lastFeedSync()
         val docs = mutableListOf<DocumentSnapshot>()
@@ -92,6 +93,8 @@ class NewsRepositoryImpl @Inject constructor(
             }
         }
 
+        // Deconectare în timpul citirii: datele nu mai aparțin sesiunii curente (cache-ul a fost golit).
+        if (sessionManager.currentUid != uid) return
         val saved = upsertKeepingLocalState(docs.mapNotNull { it.toNewsArticleOrNull() }, serverBookmarksWin = false)
         // Cursorul avansează doar până la ultima rulare citită complet: dacă ne-am oprit la MAX_PAGES
         // în mijlocul unei rulări, documentele ei rămase vin la sincronizarea următoare (cu „>=” ar fi
@@ -166,6 +169,9 @@ class NewsRepositoryImpl @Inject constructor(
 
     override suspend fun getArticleById(id: String): NewsArticle? =
         newsDao.getArticleById(id)?.toDomain()
+
+    override fun observeArticle(id: String): Flow<NewsArticle?> =
+        newsDao.observeArticleById(id).map { it?.toDomain() }.distinctUntilChanged()
 
     override suspend fun clearOldCache(daysOld: Int) {
         val cutoffTime = System.currentTimeMillis() - (daysOld * 24 * 60 * 60 * 1000L)
