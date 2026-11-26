@@ -17,6 +17,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 import ro.newsfilter.app.core.auth.SessionManager
 import ro.newsfilter.app.domain.model.AuthProvider
 import ro.newsfilter.app.domain.model.AuthResult
@@ -52,7 +53,14 @@ class AuthRepositoryImpl @Inject constructor(
     override suspend fun register(name: String, email: String, password: String): AuthResult =
         authenticate(AuthProvider.EMAIL, displayName = name.trim()) {
             auth.createUserWithEmailAndPassword(email.trim().lowercase(), password).await().also { result ->
-                result.user?.updateProfile(userProfileChangeRequest { displayName = name.trim() })?.await()
+                // Contul există deja; un eșec la numele afișat nu trebuie să anuleze înregistrarea.
+                try {
+                    result.user?.updateProfile(userProfileChangeRequest { displayName = name.trim() })?.await()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "Numele afișat nu a putut fi salvat: ${e.message}")
+                }
             }
         }
 
@@ -102,7 +110,13 @@ class AuthRepositoryImpl @Inject constructor(
             if (isNew) put("createdAt", FieldValue.serverTimestamp())
         }
         try {
-            firestore.collection("users").document(firebaseUser.uid).set(data, SetOptions.merge()).await()
+            // Offline, `await()` nu se termină până la confirmarea serverului → limită de timp,
+            // ca autentificarea să nu rămână blocată (scrierea rămâne oricum în coada Firestore).
+            val confirmed = withTimeoutOrNull(PROFILE_TIMEOUT_MS) {
+                firestore.collection("users").document(firebaseUser.uid).set(data, SetOptions.merge()).await()
+                true
+            }
+            if (confirmed == null) Log.w(TAG, "Profilul nu a fost confirmat de server în timp util")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -112,6 +126,7 @@ class AuthRepositoryImpl @Inject constructor(
 
     private companion object {
         const val TAG = "NewsFilterAuth"
+        const val PROFILE_TIMEOUT_MS = 5_000L
 
         fun Exception.toAuthMessage(): String = when (this) {
             is FirebaseAuthWeakPasswordException -> "Parola este prea slabă (minim 6 caractere)."
