@@ -22,7 +22,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
-import ro.newsfilter.app.core.auth.ClerkOAuthHelper
+import ro.newsfilter.app.core.auth.GoogleSignInHelper
 import ro.newsfilter.app.ui.screens.auth.AuthEvent
 import ro.newsfilter.app.ui.screens.auth.AuthScreen
 import ro.newsfilter.app.ui.screens.auth.AuthViewModel
@@ -38,9 +38,9 @@ import javax.inject.Inject
  *    dacă există deja o sesiune validă, trecem imediat la [MainActivity].
  * 2. **Autentificarea**: găzduiește `AuthScreen` (email + parolă, cont nou,
  *    „Continuă cu Google”). Logica și validarea sunt în [AuthViewModel].
- * 3. **Sign in with Google**: fluxul Clerk OAuth + PKCE se deschide în Custom Tabs prin
- *    [ClerkOAuthHelper]; callback-ul `newsfilter://oauth-callback` revine aici, iar
- *    access token-ul este predat ViewModel-ului (verificat apoi de n8n).
+ * 3. **Sign in with Google**: selectorul nativ de conturi (Credential Manager, prin
+ *    [GoogleSignInHelper]) are nevoie de Activity; token-ul ID rezultat este predat
+ *    ViewModel-ului și verificat de Firebase Authentication.
  * 4. **Navigarea între Activity-uri**: la succes deschide [MainActivity] cu o
  *    tranziție fade și apelează `finish()`, ca butonul Back să nu revină aici.
  *
@@ -51,20 +51,16 @@ import javax.inject.Inject
 class AuthActivity : ComponentActivity() {
 
     @Inject
-    lateinit var clerkOAuthHelper: ClerkOAuthHelper
+    lateinit var googleSignInHelper: GoogleSignInHelper
 
     private val viewModel: AuthViewModel by viewModels()
     private var isNavigating = false
-    private var handlingOAuthCallback = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         observeNavigation()
-        // Doar la prima creare: după rotire, intent-ul de callback este livrat din nou,
-        // dar verifier-ul PKCE a fost deja consumat (ar apărea o eroare falsă).
-        if (savedInstanceState == null) handleOAuthIntent(intent)
 
         setContent {
             val isDarkTheme by viewModel.isDarkTheme.collectAsStateWithLifecycle()
@@ -85,23 +81,10 @@ class AuthActivity : ComponentActivity() {
                         onTogglePasswordVisibility = viewModel::onTogglePasswordVisibility,
                         onFieldBlur = viewModel::onFieldBlur,
                         onSubmit = viewModel::submit,
-                        onGoogleClick = ::launchGoogleSignIn
+                        onGoogleClick = { viewModel.signInWithGoogle { googleSignInHelper.signIn(this@AuthActivity) } }
                     )
                 }
             }
-        }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleOAuthIntent(intent)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (viewModel.uiState.value.isGoogleLoading && !handlingOAuthCallback) {
-            viewModel.onGoogleSignInCancelled()
         }
     }
 
@@ -125,31 +108,6 @@ class AuthActivity : ComponentActivity() {
                     }
                 }
             }
-        }
-    }
-
-    /** Pornește autentificarea reală cu Google prin Clerk OAuth 2.0 + PKCE. */
-    private fun launchGoogleSignIn() {
-        if (!clerkOAuthHelper.isConfigured) {
-            viewModel.onGoogleSignInFailed("Autentificarea Clerk nu este configurată în local.properties.")
-            return
-        }
-        viewModel.onGoogleSignInStarted()
-        if (!clerkOAuthHelper.startOAuth(this)) {
-            viewModel.onGoogleSignInFailed("Nu s-a putut deschide browserul pentru autentificarea Google.")
-        }
-    }
-
-    private fun handleOAuthIntent(intent: Intent?) {
-        val uri = intent?.data ?: return
-        if (!clerkOAuthHelper.isOAuthCallback(uri)) return
-
-        handlingOAuthCallback = true
-        viewModel.onGoogleSignInStarted()
-        lifecycleScope.launch {
-            val result = clerkOAuthHelper.handleCallback(uri)
-            handlingOAuthCallback = false
-            viewModel.onClerkOAuthResult(result)
         }
     }
 

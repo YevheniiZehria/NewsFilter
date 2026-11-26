@@ -5,24 +5,21 @@ import ro.newsfilter.app.domain.model.AuthResult
 /**
  * Contractul pentru autentificare și gestionarea sesiunii.
  *
- * Implementarea ([ro.newsfilter.app.data.repository.AuthRepositoryImpl]) folosește exclusiv
- * backend-ul n8n + PostgreSQL: la succes, serverul emite un token de sesiune per utilizator,
- * păstrat criptat pe dispozitiv. Fără răspuns valid de la server nu există acces.
+ * Implementarea ([ro.newsfilter.app.data.repository.AuthRepositoryImpl]) folosește Firebase
+ * Authentication: Firebase verifică credențialele și gestionează sesiunea; fără răspuns valid
+ * de la Firebase nu există acces.
  */
 interface AuthRepository {
 
-    /** Autentificare cu email și parolă (POST /auth/login). */
+    /** Autentificare cu email și parolă. */
     suspend fun login(email: String, password: String): AuthResult
 
-    /** Creare cont nou cu email și parolă (POST /users). */
+    /** Creare cont nou cu email și parolă (profilul este salvat în `users/{uid}`). */
     suspend fun register(name: String, email: String, password: String): AuthResult
 
-    /**
-     * Autentificare Google: [clerkAccessToken] (obținut prin Clerk OAuth + PKCE) este trimis
-     * la POST /auth/google, unde n8n îl verifică direct la Clerk.
-     */
-    suspend fun signInWithGoogle(clerkAccessToken: String): AuthResult
+    /** Autentificare Google: [idToken] (obținut prin Credential Manager) este verificat de Firebase. */
+    suspend fun signInWithGoogle(idToken: String): AuthResult
 
-    /** Deconectare: revocă token-ul pe server (best effort) și șterge sesiunea locală. */
+    /** Deconectare din Firebase + ștergerea sesiunii și a datelor personale locale. */
     suspend fun logout()
 }

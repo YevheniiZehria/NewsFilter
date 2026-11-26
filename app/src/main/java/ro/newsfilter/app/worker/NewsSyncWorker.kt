@@ -6,9 +6,7 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -23,7 +21,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * Sincronizare în fundal (offline-first): aduce știrile noi de la n8n în cache-ul Room,
+ * Sincronizare în fundal (offline-first): aduce știrile noi din Cloud Firestore în cache-ul Room,
  * ca aplicația să se deschidă direct cu conținut proaspăt, chiar și fără rețea.
  *
  * Rulează periodic (la ~3 ore, doar cu rețea) și o dată după „Forțează actualizarea”,
@@ -68,7 +66,6 @@ class NewsSyncWorker @AssistedInject constructor(
 object NewsSyncScheduler {
 
     private const val PERIODIC_WORK = "news_sync_periodic"
-    private const val FOLLOW_UP_WORK = "news_sync_after_server_refresh"
 
     private val networkConstraint = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -81,15 +78,5 @@ object NewsSyncScheduler {
             .build()
         WorkManager.getInstance(context)
             .enqueueUniquePeriodicWork(PERIODIC_WORK, ExistingPeriodicWorkPolicy.KEEP, request)
-    }
-
-    /** O sincronizare după ce n8n a avut timp să proceseze sursele (RSS + scraping + Gemini). */
-    fun scheduleFollowUpSync(context: Context, delaySeconds: Long = 90) {
-        val request = OneTimeWorkRequestBuilder<NewsSyncWorker>()
-            .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
-            .setConstraints(networkConstraint)
-            .build()
-        WorkManager.getInstance(context)
-            .enqueueUniqueWork(FOLLOW_UP_WORK, ExistingWorkPolicy.REPLACE, request)
     }
 }

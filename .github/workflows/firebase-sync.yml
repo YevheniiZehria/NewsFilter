@@ -1,0 +1,41 @@
+# Sincronizare NewsFilter → Cloud Firestore (gratuit: GitHub Actions pe repo public + Firebase Spark).
+# Detalii și configurare: FIREBASE_SETUP.md
+name: firebase-sync
+
+on:
+  schedule:
+    # La fiecare 30 de minute (GitHub poate întârzia rulările programate cu câteva minute).
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+# O singură rulare odată; una nouă nu o întrerupe pe cea în curs.
+concurrency:
+  group: firebase-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: sync
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: sync/package-lock.json
+
+      - run: npm ci --no-audit --no-fund
+
+      - name: Sincronizare (RSS + Gemini + cursuri valutare)
+        run: node index.mjs
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

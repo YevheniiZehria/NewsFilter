@@ -1,0 +1,38 @@
+rules_version = '2';
+
+// Reguli de securitate Cloud Firestore pentru NewsFilter.
+// - Datele publice (știri, cursuri) sunt scrise DOAR de jobul de sincronizare (Admin SDK,
+//   care ocolește regulile) și pot fi citite doar de utilizatori autentificați.
+// - Datele personale (favorite, voturi, profil) sunt accesibile doar proprietarului.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    match /articles/{articleId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /market/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /market_history/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    match /users/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+
+      match /{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == uid;
+      }
+    }
+
+    // meta/* (indexul jobului de sincronizare) și orice altă colecție: inaccesibile din aplicație.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

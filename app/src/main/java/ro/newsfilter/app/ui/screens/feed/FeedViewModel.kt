@@ -1,10 +1,8 @@
 package ro.newsfilter.app.ui.screens.feed
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -25,10 +23,17 @@ import ro.newsfilter.app.core.network.toUserMessage
 import ro.newsfilter.app.core.util.NetworkMonitor
 import ro.newsfilter.app.data.preferences.UserPreferencesRepository
 import ro.newsfilter.app.domain.model.Category
+import ro.newsfilter.app.domain.model.Currency
+import ro.newsfilter.app.domain.model.MarketEvent
+import ro.newsfilter.app.domain.model.MarketHistory
+import ro.newsfilter.app.domain.model.MarketHistoryEvent
+import ro.newsfilter.app.domain.model.MarketPairs
+import ro.newsfilter.app.domain.model.MarketPulse
+import ro.newsfilter.app.domain.model.MarketRange
 import ro.newsfilter.app.domain.model.NewsArticle
 import ro.newsfilter.app.domain.repository.AuthRepository
+import ro.newsfilter.app.domain.repository.MarketRepository
 import ro.newsfilter.app.domain.repository.NewsRepository
-import ro.newsfilter.app.worker.NewsSyncScheduler
 import javax.inject.Inject
 
 /**
@@ -38,11 +43,11 @@ data class FeedUiState(
     val articles: List<NewsArticle> = emptyList(),
     /** Prima citire din cache-ul local s-a terminat. */
     val cacheLoaded: Boolean = false,
-    /** O sincronizare cu n8n este în curs (în fundal). */
+    /** O sincronizare cu Firestore este în curs (în fundal). */
     val isSyncing: Boolean = false,
     val isRefreshing: Boolean = false,
     val isOffline: Boolean = false,
-    /** Cererea „Forțează actualizarea” către n8n este în curs. */
+    /** „Forțează actualizarea” (resincronizare din Firestore) este în curs. */
     val isServerRefreshRunning: Boolean = false,
     val selectedMinutes: Int = 5,
     val selectedCategories: List<String> = emptyList(),
@@ -51,11 +56,51 @@ data class FeedUiState(
     /** Prenumele utilizatorului autentificat, pentru salutul personalizat. */
     val userFirstName: String = "",
     /** „Scutură pentru știri noi” activat din Setări. */
-    val shakeToRefreshEnabled: Boolean = true
+    val shakeToRefreshEnabled: Boolean = true,
+    /** Market Pulse: ultimele cursuri din `market/pulse` (doar în memorie). */
+    val marketPulse: MarketPulse? = null,
+    /** Ultima actualizare Market Pulse a eșuat (offline / eroare) → afișăm „neactualizat”. */
+    val marketPulseStale: Boolean = false,
+    /** Widget-ul valutar din capul Feed-ului (pereche, direcție, interval, istoric). */
+    val marketWidget: MarketWidgetState = MarketWidgetState()
 ) {
     /** Shimmer doar când nu avem nimic de afișat încă (cache gol și sincronizare în curs). */
     val isLoading: Boolean
         get() = !cacheLoaded || (articles.isEmpty() && isSyncing)
+}
+
+/**
+ * Starea widget-ului valutar (convertor + grafic).
+ * @property pair perechea stocată (ex. „USD/RON”)
+ * @property inverted direcția inversă (ex. RON → USD): cursul afișat este 1/x
+ * @property history seria brută a perechii (din memorie sau proaspăt descărcată); null = încă nimic
+ * @property isStale actualizarea a eșuat, se afișează ultimele date descărcate
+ * @property error mesajul afișat când nu avem nimic de arătat (ex. offline la prima deschidere)
+ */
+data class MarketWidgetState(
+    val pair: String = MarketPairs.DEFAULT,
+    val inverted: Boolean = false,
+    val range: MarketRange = MarketRange.M1,
+    val history: MarketHistory? = null,
+    val isLoading: Boolean = false,
+    val isStale: Boolean = false,
+    val error: String? = null
+) {
+    /** Moneda de bază / cotată în direcția afișată (ex. USD → RON). */
+    val from: Currency get() = MarketPairs.split(pair).let { if (inverted) it.second else it.first }
+    val to: Currency get() = MarketPairs.split(pair).let { if (inverted) it.first else it.second }
+
+    /** Seria în direcția afișată. */
+    val displayHistory: MarketHistory? get() = if (inverted) history?.inverted() else history
+}
+
+/** Unde se deschide știrea din bannerul Market Pulse. */
+sealed interface MarketEventTarget {
+    /** Articolul există în cache-ul Room → ecranul de detaliu. */
+    data class Detail(val articleId: String) : MarketEventTarget
+
+    /** Articolul nu e în cache (altă categorie) → browser. */
+    data class Browser(val url: String) : MarketEventTarget
 }
 
 /**
@@ -65,23 +110,23 @@ data class FeedUiState(
  * Flux de date (offline-first):
  * 1. Lista vine EXCLUSIV din cache-ul Room ([NewsRepository.observeFeed]) → ecranul se
  *    deschide instantaneu, inclusiv offline.
- * 2. Sincronizarea cu n8n ([loadNews]) rulează în fundal și doar actualizează cache-ul;
+ * 2. Sincronizarea cu Cloud Firestore ([loadNews]) rulează în fundal și doar actualizează cache-ul;
  *    lista se actualizează singură. Erorile apar ca ecran de eroare doar dacă nu avem
  *    nimic salvat, altfel ca Snackbar.
  * 3. La revenirea conexiunii se sincronizează automat.
- * 4. „Forțează actualizarea” ([forceServerRefresh]) cere n8n să ruleze ingestia acum și
- *    programează o sincronizare ulterioară (WorkManager), când știrile noi sunt gata.
+ * 4. „Forțează actualizarea” ([forceServerRefresh]) resincronizează imediat din Firestore
+ *    (sursele sunt procesate automat la 30 de minute de jobul de sincronizare).
  * 5. Mesajele (Snackbar) sunt emise o singură dată prin [messages] (Channel).
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class FeedViewModel @Inject constructor(
     private val newsRepository: NewsRepository,
+    private val marketRepository: MarketRepository,
     private val preferencesRepository: UserPreferencesRepository,
     private val authRepository: AuthRepository,
     private val networkMonitor: NetworkMonitor,
-    private val audioPlayer: NewsAudioPlayer,
-    @ApplicationContext private val context: Context
+    private val audioPlayer: NewsAudioPlayer
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(FeedUiState())
@@ -95,8 +140,14 @@ class FeedViewModel @Inject constructor(
     /** Mesaje unice pentru Snackbar (confirmări de acțiuni). */
     val messages: Flow<String> = _messages.receiveAsFlow()
 
+    private val _marketEventTargets = Channel<MarketEventTarget>(Channel.BUFFERED)
+
+    /** Navigarea cerută de bannerul Market Pulse (emisă o singură dată). */
+    val marketEventTargets: Flow<MarketEventTarget> = _marketEventTargets.receiveAsFlow()
+
     private val categories = MutableStateFlow<List<String>?>(null)
     private var syncJob: Job? = null
+    private var chartJob: Job? = null
 
     init {
         // Starea conexiunii: banner offline + sincronizare automată la revenire.
@@ -104,7 +155,10 @@ class FeedViewModel @Inject constructor(
             networkMonitor.isOnline.collect { isOnline ->
                 val wasOffline = _uiState.value.isOffline
                 _uiState.update { it.copy(isOffline = !isOnline) }
-                if (isOnline && wasOffline) loadNews()
+                if (isOnline && wasOffline) {
+                    loadNews()
+                    refreshMarketPulse()
+                }
             }
         }
 
@@ -160,10 +214,11 @@ class FeedViewModel @Inject constructor(
     }
 
     /**
-     * Sincronizează cache-ul cu n8n. Lista afișată se actualizează automat din Room.
+     * Sincronizează cache-ul cu Firestore. Lista afișată se actualizează automat din Room.
      * @param isRefresh true pentru pull-to-refresh / buton (indicator vizibil + mesaj la eroare)
      */
     fun loadNews(isRefresh: Boolean = false) {
+        if (isRefresh) refreshMarketPulse()
         val selected = categories.value ?: return
         syncJob?.cancel()
         syncJob = viewModelScope.launch {
@@ -188,6 +243,124 @@ class FeedViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Market Pulse în timp real: ascultă cursurile din Firestore cât timp este apelată
+     * (FeedScreen o rulează doar cât ecranul este vizibil — STARTED — și o anulează apoi).
+     * Fiecare actualizare a cursurilor reîmprospătează și graficul. Erorile nu se afișează:
+     * păstrăm ultimele valori și le marcăm „neactualizat”.
+     */
+    suspend fun collectMarketPulse() {
+        try {
+            marketRepository.observeMarketPulse().collect { pulse ->
+                val offline = _uiState.value.isOffline
+                _uiState.update { it.copy(marketPulse = pulse, marketPulseStale = offline) }
+                if (!_uiState.value.marketWidget.isLoading) loadMarketHistory()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            _uiState.update { it.copy(marketPulseStale = true) }
+        }
+    }
+
+    /**
+     * Reîmprospătare manuală / scuturare / revenirea conexiunii: cursurile vin deja în timp real,
+     * deci reîncărcăm doar graficul (repository-ul servește din memorie datele recente).
+     */
+    fun refreshMarketPulse() {
+        if (_uiState.value.isOffline) {
+            _uiState.update { it.copy(marketPulseStale = it.marketPulse != null) }
+            return
+        }
+        if (!_uiState.value.marketWidget.isLoading) loadMarketHistory()
+    }
+
+    /** Banner Market Pulse: detaliul articolului dacă e în cache, altfel link-ul original. */
+    fun openMarketEvent(event: MarketEvent) = openMarketArticle(event.articleId, event.articleUrl)
+
+    /** Punct-știre de pe grafic: același comportament ca bannerul. */
+    fun openChartEvent(event: MarketHistoryEvent) = openMarketArticle(event.articleId, event.articleUrl)
+
+    private fun openMarketArticle(articleId: String, articleUrl: String) {
+        viewModelScope.launch {
+            val target = when {
+                newsRepository.getArticleById(articleId) != null -> MarketEventTarget.Detail(articleId)
+                articleUrl.isNotBlank() -> MarketEventTarget.Browser(articleUrl)
+                else -> return@launch
+            }
+            _marketEventTargets.send(target)
+        }
+    }
+
+    /**
+     * Schimbă perechea / direcția widget-ului (chip-uri sau listele derulante ale convertorului).
+     * Inversarea direcției nu cere date noi: seria se afișează ca 1/x.
+     */
+    fun selectMarketPair(pair: String, inverted: Boolean = false) {
+        val widget = _uiState.value.marketWidget
+        if (widget.pair == pair && widget.inverted == inverted) return
+        _uiState.update { it.copy(marketWidget = widget.copy(pair = pair, inverted = inverted)) }
+        if (widget.pair != pair) loadMarketHistory()
+    }
+
+    /** Butonul ⇅ al convertorului: inversează direcția (ex. USD → RON devine RON → USD). */
+    fun swapMarketDirection() {
+        _uiState.update { it.copy(marketWidget = it.marketWidget.copy(inverted = !it.marketWidget.inverted)) }
+    }
+
+    /** Selectorul de interval 1 Z / 5 Z / 1 L / 1 A / Max. */
+    fun selectMarketRange(range: MarketRange) {
+        val widget = _uiState.value.marketWidget
+        if (widget.range == range) return
+        _uiState.update { it.copy(marketWidget = widget.copy(range = range)) }
+        loadMarketHistory()
+    }
+
+    /**
+     * Încarcă istoricul pentru perechea / intervalul curent: afișează imediat ce avem în memorie,
+     * apoi actualizează de pe server. Offline / la eroare păstrează ultimele date („date salvate”).
+     */
+    private fun loadMarketHistory() {
+        val widget = _uiState.value.marketWidget
+        val (pair, range) = widget.pair to widget.range
+        val cached = marketRepository.cachedMarketHistory(pair, range)
+        chartJob?.cancel()
+
+        fun updateIfCurrent(transform: (MarketWidgetState) -> MarketWidgetState) = _uiState.update { state ->
+            val w = state.marketWidget
+            if (w.pair == pair && w.range == range) state.copy(marketWidget = transform(w)) else state
+        }
+
+        if (_uiState.value.isOffline) {
+            updateIfCurrent {
+                it.copy(
+                    history = cached,
+                    isLoading = false,
+                    isStale = cached != null,
+                    error = if (cached == null) "Graficul nu este disponibil offline." else null
+                )
+            }
+            return
+        }
+        updateIfCurrent { it.copy(history = cached, isLoading = true, error = null) }
+        chartJob = viewModelScope.launch {
+            try {
+                val history = marketRepository.fetchMarketHistory(pair, range)
+                updateIfCurrent { it.copy(history = history, isLoading = false, isStale = false, error = null) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                updateIfCurrent {
+                    it.copy(
+                        isLoading = false,
+                        isStale = it.history != null,
+                        error = if (it.history == null) "Graficul nu a putut fi încărcat: ${e.toUserMessage()}" else null
+                    )
+                }
+            }
+        }
+    }
+
     /** Schimbă timpul de lectură și resincronizează. */
     fun onTimeChanged(newMinutes: Int) {
         if (_uiState.value.selectedMinutes == newMinutes) return
@@ -196,25 +369,22 @@ class FeedViewModel @Inject constructor(
     }
 
     /**
-     * „Forțează actualizarea” (app → n8n): pornește acum workflow-ul de ingestie
-     * (RSS → scraping → Gemini). Știrile noi sosesc după 1-2 minute printr-o
-     * sincronizare programată cu WorkManager (funcționează și dacă ieși din aplicație).
+     * „Forțează actualizarea”: resincronizează acum știrile din Firestore. Procesarea surselor
+     * (RSS → scraping → Gemini) rulează automat la 30 de minute în jobul de sincronizare
+     * (GitHub Actions), deci aplicația nu o mai pornește direct.
      */
     fun forceServerRefresh() {
         if (_uiState.value.isServerRefreshRunning) return
+        val selected = categories.value ?: return
         viewModelScope.launch {
             _uiState.update { it.copy(isServerRefreshRunning = true) }
             val message = try {
-                if (newsRepository.requestServerRefresh()) {
-                    NewsSyncScheduler.scheduleFollowUpSync(context)
-                    "Sursele se actualizează. Știrile noi apar automat în 1-2 minute."
-                } else {
-                    "O actualizare a fost pornită recent. Încearcă din nou peste câteva minute."
-                }
+                newsRepository.syncFeed(selected, _uiState.value.selectedMinutes)
+                "Știrile sunt la zi. Sursele noi sunt procesate automat la fiecare 30 de minute."
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                "Actualizarea nu a putut fi pornită: ${e.toUserMessage()}"
+                "Actualizarea a eșuat: ${e.toUserMessage()}"
             }
             _uiState.update { it.copy(isServerRefreshRunning = false) }
             _messages.send(message)

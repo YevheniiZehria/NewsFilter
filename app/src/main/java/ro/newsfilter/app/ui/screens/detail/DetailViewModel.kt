@@ -27,7 +27,7 @@ data class DetailUiState(
     val isFeedbackSent: Boolean = false,
     val feedbackPositive: Boolean? = null,
     val error: String? = null,
-    /** Analiza „Aprofundează subiectul” (din cache sau generată acum de n8n). */
+    /** Analiza „Aprofundează subiectul” (din cache sau citită acum din Firestore). */
     val deepDive: String? = null,
     val isDeepDiveLoading: Boolean = false,
     val deepDiveError: String? = null
@@ -40,7 +40,7 @@ data class DetailUiState(
  * - Încarcă articolul din cache-ul local (Room) — funcționează și offline.
  * - La deschidere, marchează automat articolul ca citit.
  * - Restaurează votul salvat (Like / Dislike rămâne vizibil la redeschidere).
- * - Acțiuni app → n8n: feedback, favorit (POST /bookmarks), „Aprofundează” (POST /deep-dive).
+ * - Acțiuni în Firestore: vot (`users/{uid}/votes`), favorit (`users/{uid}/bookmarks`), „Aprofundează” (`articles/{id}`).
  */
 @HiltViewModel
 class DetailViewModel @Inject constructor(
@@ -96,13 +96,13 @@ class DetailViewModel @Inject constructor(
     }
 
     /**
-     * Trimite feedback (like/dislike) către n8n (o singură dată per articol)
+     * Salvează feedback-ul (like/dislike) în Firestore (o singură dată per articol)
      * și salvează votul local, ca să fie reținut la redeschiderea articolului.
      */
     fun sendFeedback(isPositive: Boolean) {
         if (_uiState.value.isFeedbackSent) return
         // Actualizare optimistă: UI-ul reacționează instantaneu, votul se salvează
-        // în Room, iar cererea POST /feedback pleacă în fundal.
+        // în Room, iar votul se salvează în Firestore în fundal.
         _uiState.update { state ->
             state.copy(
                 isFeedbackSent = true,
@@ -117,7 +117,7 @@ class DetailViewModel @Inject constructor(
     }
 
     /**
-     * „Aprofundează subiectul” (app → n8n → Gemini): context, de ce contează, ce urmează.
+     * „Aprofundează subiectul” (pre-generat de Gemini, citit din Firestore): context, de ce contează, ce urmează.
      * Rezultatul este păstrat în Room, deci a doua oară apare instantaneu și offline.
      */
     fun requestDeepDive() {

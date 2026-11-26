@@ -1,15 +1,23 @@
 package ro.newsfilter.app.data.repository
 
 import android.util.Log
+import com.google.firebase.FirebaseNetworkException
+import com.google.firebase.FirebaseTooManyRequestsException
+import com.google.firebase.auth.AuthResult as FirebaseAuthResult
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.auth.FirebaseAuthWeakPasswordException
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.userProfileChangeRequest
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.withTimeoutOrNull
-import retrofit2.Response
+import kotlinx.coroutines.tasks.await
 import ro.newsfilter.app.core.auth.SessionManager
-import ro.newsfilter.app.core.network.toUserMessage
-import ro.newsfilter.app.data.remote.NewsApiService
-import ro.newsfilter.app.data.remote.dto.AuthRequestDto
-import ro.newsfilter.app.data.remote.dto.AuthResponseDto
-import ro.newsfilter.app.data.remote.dto.GoogleAuthRequestDto
 import ro.newsfilter.app.domain.model.AuthProvider
 import ro.newsfilter.app.domain.model.AuthResult
 import ro.newsfilter.app.domain.model.User
@@ -18,116 +26,107 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Implementarea autentificării: **strict, doar prin server**, cu sesiuni per utilizator.
+ * Implementarea autentificării cu **Firebase Authentication** (email + parolă și Google).
  *
  * Flux de date:
- * 1. Cererea pleacă spre n8n (`/auth/login`, `/users` sau `/auth/google`). Pentru Google,
- *    aplicația trimite doar access token-ul Clerk; n8n află identitatea direct de la Clerk.
- * 2. La succes, n8n creează un rând în tabela `sessions` (doar hash-ul token-ului) și
- *    întoarce token-ul în clar o singură dată.
- * 3. [SessionManager] criptează token-ul cu Android Keystore și îl salvează; toate cererile
- *    ulterioare îl trimit ca `Authorization: Bearer`.
- * 4. Orice altceva decât 2xx (401, 403, 409, 404, 5xx, timeout, fără rețea, JSON invalid)
- *    blochează accesul cu un mesaj specific.
+ * 1. Firebase verifică credențialele (parola nu este stocată de aplicație; pentru Google,
+ *    token-ul ID obținut prin Credential Manager este verificat de Firebase).
+ * 2. La succes, profilul este scris (best effort) în Firestore, la `users/{uid}`, iar
+ *    [SessionManager] salvează oglinda locală a sesiunii → UI-ul deschide `MainActivity`.
+ * 3. Accesul la datele personale din Firestore este protejat de regulile de securitate
+ *    (`request.auth.uid == uid`), nu de aplicație.
+ * 4. Orice eroare devine un mesaj specific în română ([AuthResult.Failure]); fără răspuns
+ *    valid de la Firebase nu există acces (fără mod offline).
  */
 @Singleton
 class AuthRepositoryImpl @Inject constructor(
-    private val apiService: NewsApiService,
+    private val auth: FirebaseAuth,
+    private val firestore: FirebaseFirestore,
     private val sessionManager: SessionManager
 ) : AuthRepository {
 
-    override suspend fun login(email: String, password: String): AuthResult =
-        authenticate(
-            call = { apiService.login(AuthRequestDto(email.trim().lowercase(), password)) },
-            messageFor = mapOf(401 to "Email sau parolă incorectă.")
-        )
+    override suspend fun login(email: String, password: String): AuthResult = authenticate(AuthProvider.EMAIL) {
+        auth.signInWithEmailAndPassword(email.trim().lowercase(), password).await()
+    }
 
     override suspend fun register(name: String, email: String, password: String): AuthResult =
-        authenticate(
-            call = { apiService.register(AuthRequestDto(email.trim().lowercase(), password, name.trim())) },
-            messageFor = mapOf(409 to "Există deja un cont cu acest email. Autentifică-te.")
-        )
+        authenticate(AuthProvider.EMAIL, displayName = name.trim()) {
+            auth.createUserWithEmailAndPassword(email.trim().lowercase(), password).await().also { result ->
+                result.user?.updateProfile(userProfileChangeRequest { displayName = name.trim() })?.await()
+            }
+        }
 
-    override suspend fun signInWithGoogle(clerkAccessToken: String): AuthResult =
-        authenticate(
-            call = { apiService.loginWithGoogle(GoogleAuthRequestDto(clerkAccessToken)) },
-            messageFor = mapOf(
-                401 to "Autentificarea Google nu a putut fi verificată. Încearcă din nou.",
-                409 to "Acest email are deja un cont cu parolă. Autentifică-te cu email și parolă."
-            )
-        )
+    override suspend fun signInWithGoogle(idToken: String): AuthResult = authenticate(AuthProvider.GOOGLE) {
+        auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
+    }
 
     override suspend fun logout() {
-        // Revocarea pe server este „best effort”: deconectarea locală are loc oricum,
-        // chiar și offline (token-ul expiră singur pe server după 30 de zile).
-        try {
-            withTimeoutOrNull(LOGOUT_TIMEOUT_MS) { apiService.logout() }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            Log.w(TAG, "Revocarea sesiunii pe server a eșuat: ${e.message}")
-        }
         sessionManager.endSession()
     }
 
     // ------------------------------------------------------------------
 
-    /**
-     * Execută apelul de autentificare și pornește sesiunea doar pe 2xx cu token valid.
-     * [messageFor] conține mesajele pentru codurile cu semnificație specifică endpoint-ului.
-     */
     private suspend fun authenticate(
-        call: suspend () -> Response<AuthResponseDto>,
-        messageFor: Map<Int, String>
+        provider: AuthProvider,
+        displayName: String? = null,
+        call: suspend () -> FirebaseAuthResult
     ): AuthResult {
-        val response = try {
-            call()
+        val firebaseUser = try {
+            call().user ?: return AuthResult.Failure("Răspuns invalid de la Firebase.")
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Autentificare eșuată (fără răspuns valid)", e)
-            return AuthResult.Failure(e.toUserMessage())
+            Log.e(TAG, "Autentificare eșuată", e)
+            return AuthResult.Failure(e.toAuthMessage())
         }
 
-        val body = response.body()
-        val code = response.code()
-        if (!response.isSuccessful || body == null || body.token.isBlank()) {
-            val message = messageFor[code] ?: when {
-                response.isSuccessful -> "Răspuns invalid de la server."
-                else -> httpMessage(code)
-            }
-            Log.e(TAG, "Autentificare eșuată (HTTP $code): $message")
-            return AuthResult.Failure(message)
-        }
-
+        val email = firebaseUser.email.orEmpty()
         val user = User(
-            email = body.user.email,
-            name = body.user.name.ifBlank { nameFromEmail(body.user.email) },
-            provider = AuthProvider.fromKey(body.user.authProvider)
+            email = email,
+            name = (displayName ?: firebaseUser.displayName)?.takeIf { it.isNotBlank() } ?: nameFromEmail(email),
+            provider = provider
         )
-        return try {
-            sessionManager.startSession(user, body.token)
-            Log.d(TAG, "Sesiune pornită pentru ${user.email}")
-            AuthResult.Success(user)
+        saveProfile(firebaseUser, user, isNew = displayName != null)
+        sessionManager.startSession(firebaseUser.uid, user)
+        Log.d(TAG, "Sesiune Firebase pornită (${provider.key})")
+        return AuthResult.Success(user)
+    }
+
+    /** Profilul din `users/{uid}`; o eroare aici nu blochează autentificarea. */
+    private suspend fun saveProfile(firebaseUser: FirebaseUser, user: User, isNew: Boolean) {
+        val data = buildMap<String, Any> {
+            put("name", user.name)
+            put("email", user.email)
+            put("authProvider", user.provider.key)
+            put("lastLoginAt", FieldValue.serverTimestamp())
+            if (isNew) put("createdAt", FieldValue.serverTimestamp())
+        }
+        try {
+            firestore.collection("users").document(firebaseUser.uid).set(data, SetOptions.merge()).await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Keystore indisponibil / defect: GeneralSecurityException sau ProviderException.
-            Log.e(TAG, "Token-ul de sesiune nu a putut fi criptat", e)
-            AuthResult.Failure("Sesiunea nu a putut fi salvată în siguranță pe acest dispozitiv.")
+            Log.w(TAG, "Profilul nu a putut fi salvat în Firestore: ${e.message}")
         }
     }
 
     private companion object {
         const val TAG = "NewsFilterAuth"
-        const val LOGOUT_TIMEOUT_MS = 5_000L
 
-        fun httpMessage(code: Int): String = when (code) {
-            400 -> "Datele trimise nu sunt valide."
-            403 -> "Configurare invalidă: cheia API nu corespunde serverului."
-            404 -> "Serviciul de autentificare nu este activ (workflow-ul n8n este inactiv)."
-            in 500..599 -> "Eroare de server (HTTP $code). Încearcă din nou."
-            else -> "Autentificarea a eșuat (HTTP $code)."
+        fun Exception.toAuthMessage(): String = when (this) {
+            is FirebaseAuthWeakPasswordException -> "Parola este prea slabă (minim 6 caractere)."
+            is FirebaseAuthUserCollisionException -> "Există deja un cont cu acest email. Autentifică-te."
+            is FirebaseAuthInvalidUserException -> when (errorCode) {
+                "ERROR_USER_DISABLED" -> "Acest cont a fost dezactivat."
+                else -> "Email sau parolă incorectă."
+            }
+            is FirebaseAuthInvalidCredentialsException -> when (errorCode) {
+                "ERROR_INVALID_EMAIL" -> "Adresa de email nu este validă."
+                else -> "Email sau parolă incorectă."
+            }
+            is FirebaseTooManyRequestsException -> "Prea multe încercări. Încearcă din nou peste câteva minute."
+            is FirebaseNetworkException -> "Nu există conexiune la internet. Verifică rețeaua și încearcă din nou."
+            else -> "Autentificarea a eșuat. Încearcă din nou."
         }
 
         /** „ana.popescu@x.ro” → „Ana Popescu”. */

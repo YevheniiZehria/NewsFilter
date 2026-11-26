@@ -2,54 +2,50 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-NewsFilter: native Android news app (Kotlin, Jetpack Compose, Hilt, Room, Retrofit/Moshi, DataStore, WorkManager) backed by n8n webhooks + PostgreSQL. Code comments, KDoc and all user-facing strings are in Romanian — keep that convention. `DOCUMENTATIE.md` is the long-form project documentation (university assignment, requirements in `Cerință.pdf`).
+NewsFilter: native Android news app (Kotlin, Jetpack Compose, Hilt, Room, DataStore, WorkManager) backed by **Firebase** (Auth + Cloud Firestore, free Spark plan) and a scheduled **GitHub Actions** job (`sync/`) that ingests news and exchange rates. Code comments, KDoc and all user-facing strings are in Romanian — keep that convention. `DOCUMENTATIE.md` is the long-form project documentation (university assignment, requirements in `Cerință.pdf`); `FIREBASE_SETUP.md` is the setup guide.
 
 ## Commands
 
 There is no `java` on PATH on this machine; point Gradle at the bundled Temurin JDK (Git Bash):
 
     export JAVA_HOME="/c/Users/eugen/.jdks/temurin-21.0.12.1"
-    ./gradlew :app:compileDebugKotlin --console=plain   # fast check (includes KSP: Room, Hilt, Moshi codegen)
+    ./gradlew :app:compileDebugKotlin --console=plain   # fast check (includes KSP: Room, Hilt)
     ./gradlew :app:assembleDebug --console=plain        # debug APK
 
-There are no unit/instrumented tests and no lint configuration beyond Android defaults.
+The build needs `app/google-services.json` (git-ignored; real file from the Firebase console, or a placeholder with package `ro.newsfilter.app` just to compile). There are no unit/instrumented tests and no lint configuration beyond Android defaults.
 
-Backend (local):
+Sync job (Node 22+, no build step):
 
-    cd backend && docker compose up -d     # postgres:16 + n8n on :5678, env from backend/.env
-    docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < postgres_schema.sql
+    cd sync && npm ci
+    node index.mjs --dry-run      # real RSS/rates/scraping, no Gemini, no Firestore writes
+    node index.mjs                # needs FIREBASE_SERVICE_ACCOUNT (JSON) and optional GEMINI_API_KEY
 
-`postgres_schema.sql` is idempotent and is only auto-run when the Postgres volume is first created — re-run it manually after schema changes. Workflow JSONs in `backend/` must be re-imported into n8n by hand (then re-select the Postgres credential in each Postgres node and activate).
-
-## Configuration
-
-- `local.properties` (git-ignored, see `local.properties.example`) → `BuildConfig` fields in `app/build.gradle.kts`: `N8N_BASE_URL` (default `http://10.0.2.2:5678/webhook/`, must end with `/`), `N8N_API_KEY`, `CLERK_DOMAIN`, `CLERK_CLIENT_ID`.
-- `backend/.env` (git-ignored, see `.env.example`) → n8n container env: `N8N_API_KEY` (must equal the app's), `GEMINI_API_KEY`, `CLERK_DOMAIN`, `POSTGRES_*`. `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` is required because workflows read `$env`.
+`.github/workflows/firebase-sync.yml` runs it every 30 min (+ manual dispatch) with those two repo secrets. Firestore rules: `firebase/firestore.rules` (paste in console or `firebase deploy --only firestore:rules`).
 
 ## Architecture
 
-Single module `app`, package `ro.newsfilter.app`, layered `domain` (models + repository interfaces) / `data` (Room, DataStore, Retrofit, repository impls) / `ui` (Compose screens + ViewModels) / `core` (DI, auth, network, audio, sensor, util). Hilt bindings live in `core/di/`.
+Single module `app`, package `ro.newsfilter.app`, layered `domain` (models + repository interfaces) / `data` (Room, DataStore, Firestore mappers, repository impls) / `ui` (Compose screens + ViewModels) / `core` (DI, auth, errors, audio, sensor, util). Hilt bindings live in `core/di/` (`FirebaseModule` provides `FirebaseAuth` + `FirebaseFirestore` with memory-only cache — Room is the persistent cache).
 
-**Two activities.** `AuthActivity` (launcher; login/register/Google, handles the `newsfilter://oauth-callback` deep link) and `MainActivity` (Compose NavGraph: Onboarding, Feed, Bookmarks, Settings, Detail). Neither navigates on button presses directly: both observe `UserPreferences.isLoggedIn` from DataStore and switch activities when it changes (`AuthViewModel.startupState`, `NewsFilterAppContent` session guard).
+**Two activities.** `AuthActivity` (launcher; login/register/Google) and `MainActivity` (Compose NavGraph: Onboarding, Feed, Bookmarks, Settings, Detail). Neither navigates on button presses directly: both observe `UserPreferences.isLoggedIn` from DataStore and switch activities when it changes (`AuthViewModel.startupState`, `NewsFilterAppContent` session guard).
 
-**Auth / sessions (strict, server-only — no offline login).**
-- n8n issues an opaque 256-bit session token on `/auth/login`, `/users`, `/auth/google`; Postgres `sessions` stores only its SHA-256 hash (30-day expiry, `revoked_at`).
-- Google: `ClerkOAuthHelper` runs Clerk OAuth 2.0 + PKCE in Custom Tabs (verifier/state persisted in SharedPreferences to survive process death) and returns only the Clerk access token; n8n verifies it against `https://$CLERK_DOMAIN/oauth/userinfo`. The app never sends a trusted email.
-- `SessionManager` is the single owner of the token: encrypts it with an Android Keystore AES-GCM key (`TokenCipher`) into DataStore, caches it in memory. `isLoggedIn` is true only if the encrypted token exists.
-- OkHttp chain (`NetworkModule`): `ApiKeyInterceptor` (`X-API-Key` on every call) → `AuthInterceptor` (Bearer token; on 401 from a non-auth endpoint calls `SessionManager.onUnauthorized` → session + Room wiped → UI returns to login).
-- `SessionManager.endSession()` also clears the whole Room cache (per-account data); bookmarks are restored from the server via `NewsRepository.syncBookmarks()` on next login.
+**Auth (Firebase Authentication, no offline login).**
+- `AuthRepositoryImpl`: email/password (`signInWithEmailAndPassword` / `createUserWithEmailAndPassword` + display name) and Google (`GoogleSignInHelper` → Credential Manager `GetSignInWithGoogleOption` → ID token → `GoogleAuthProvider`). Writes `users/{uid}` best-effort. `FirebaseAuthException`s are mapped to Romanian messages. `default_web_client_id` is looked up at runtime (generated by the google-services plugin only once Google sign-in is enabled).
+- `SessionManager` mirrors Firebase state into DataStore (`firebase_uid`, email, name, provider); `isLoggedIn` = flag && UID present (old n8n sessions are thus invalid). `start()` (from `NewsFilterApp.onCreate`) wipes local data if Firebase has no user and logs out when the Firebase user disappears. `endSession()` = `signOut()` + clear DataStore session + whole Room cache (per-account data); bookmarks come back via `NewsRepository.syncBookmarks()` on next login.
 
-**News data (offline-first).** Room is the single source of truth for the UI. `FeedViewModel` collects `NewsRepository.observeFeed(categories)` (unread articles, `NewsDao.observeFeed`); `syncFeed()` only writes fetched `/news` results into Room via `upsertKeepingLocalState` (preserves local `is_read`, `user_vote`, `deep_dive`, bookmark state). Sync triggers: screen open, pull-to-refresh, network regained, `NewsSyncWorker` (periodic 3h, scheduled in `NewsFilterApp.onCreate`, plus a one-off ~90s after "Force refresh"). Network errors become user text through `Throwable.toUserMessage()` (`core/network/ApiErrors.kt`). `NewsDto` fields are all nullable on purpose; invalid rows are dropped by `toDomainOrNull()` instead of failing the whole list.
+**News data (offline-first).** Room is the single source of truth for the UI. `FeedViewModel` collects `NewsRepository.observeFeed(categories)` (unread articles, `NewsDao.observeFeed`, category filter is local). `syncFeed()` is **incremental**: `articles where updatedAt > cursor orderBy updatedAt` (pages of 200; first sync = latest 200), cursor stored in DataStore in microseconds (`last_feed_sync_us`, reset at logout); results go through `upsertKeepingLocalState` (preserves local `is_read`, `user_vote`, `deep_dive`, bookmark state). Bookmarks = `users/{uid}/bookmarks/{id}` holding a full article copy (survives server cleanup); votes = `users/{uid}/votes/{id}`. Deep dive is pre-generated by the sync job (`requestDeepDive` reads Room, then `articles/{id}`; missing → `UserFacingException`). "Force refresh" just re-runs `syncFeed`. Sync triggers: screen open, pull-to-refresh, network regained, `NewsSyncWorker` (periodic 3h, scheduled in `NewsFilterApp.onCreate`). Errors become user text through `Throwable.toUserMessage()` (`core/network/ApiErrors.kt`: Firestore codes, `UserFacingException`, IO). Firestore docs are mapped in `data/remote/firestore/FirestoreMappers.kt`; incomplete docs are dropped (`toNewsArticleOrNull()`) instead of failing the list. Room ↔ domain mappers: `data/local/entity/EntityMappers.kt`.
 
-**Room schema** (`AppDatabase`, currently v4) uses explicit migrations registered in `DatabaseModule` plus exported schemas in `app/schemas/` — bump the version, add a `MIGRATION_x_y`, and let KSP export the new JSON. List fields (`ai_bullets`, `ai_tags`) are stored as `\n`-joined strings (no TypeConverters).
+**Market Pulse.** `MarketRepository.observeMarketPulse()` = snapshot listener on `market/pulse` (rates map keyed `EUR_RON|USD_RON|BTC_USD`) combined with the latest UP/DOWN article from Room (48 h window); `FeedScreen` collects it via `FeedViewModel.collectMarketPulse()` only while STARTED. History: `fetchMarketHistory` reads one doc (`market_history/{PAIR}_intraday` = 30-min points / 30 days for 1d/5d/1m; `{PAIR}_daily` = 5 years for 1y/max), caches raw points 30 min, buckets on-device like the old SQL (`10m/30m/4h/1d/7d`, origin Monday 2000-01-03), chart events from Room (`NewsDao.getMarketEvents`). UI: `MarketWidgetCard` (rate header, `MarketLineChart` Compose `Canvas` chart with scrubbing, `CurrencyConverter`; state `MarketWidgetState` in `FeedViewModel`, pair inversion is client-side 1/x; formatting helpers in `MarketFormat.kt`).
 
-## n8n backend
+**Room schema** (`AppDatabase`, currently v5) uses explicit migrations registered in `DatabaseModule` plus exported schemas in `app/schemas/` — bump the version, add a `MIGRATION_x_y`, and let KSP export the new JSON. List fields (`ai_bullets`, `ai_tags`) are stored as `\n`-joined strings (no TypeConverters).
 
-- `workflow_2_api_webhooks.json` — the REST API. Every route: Webhook → API-key IF → (protected routes) session-check Postgres node + IF → work → Respond node. Shared 403/401 responders. Routes: `POST auth/login|auth/google|auth/logout|users|bookmarks|feedback|deep-dive`, `GET news|bookmarks|categories`. List endpoints return a single item `{list}` and respond `JSON.stringify($json.list)` so empty results are still `[]`.
-- `workflow_1_ingestion_and_processing.json` — BBC RSS ingestion (schedule 30 min, manual, or `POST refresh` from the app, rate-limited to once per 3 min via `refresh_requests`): normalize to app category slugs (`tech`, `economy`, …) → scraping → Gemini "Smart Digest" (JSON: summary + 2-3 bullets + tags) → upsert `articles`.
-- Postgres node parameters are passed as array expressions (`={{ [a, b] }}`), never comma-separated strings (commas in values break mapping). Tokens/hashes are generated in SQL with pgcrypto (`gen_random_bytes`, `digest`), not in Code nodes.
-- Category values must match `domain/model/Category.slug` exactly; the Room feed query filters on them.
+## Sync job (`sync/`) and Firestore
+
+- `index.mjs` → `lib/market.mjs` (Frankfurter/ECB fiat + CoinGecko BTC; long history once/day tracked in `meta/sync`) → `market/pulse` (merge, so a failed source keeps its last rate) + append to `_intraday` (30 days) + merge `_daily` (5 years). Then `lib/rss.mjs` (6 BBC feeds; **category = feed**, slugs must match `domain/model/Category.slug`) → `lib/scrape.mjs` (full text; reading time from full text) → `lib/gemini.mjs` (`gemini-flash-lite-latest`, 5 articles per call, max 30/run; JSON: summary, 2-3 bullets, tags, `affected_currency` ∈ `EUR/RON|USD/RON|BTC/USD`, `market_sentiment` `UP|DOWN|NEUTRAL` (NEUTRAL + no pair = analyzed, no impact), `market_impact_note`, `deep_dive`) → `articles/{sha1(url)[0..20]}` with `updatedAt` server timestamp.
+- To stay within Spark quotas the job never queries `articles`: `meta/index` maps article id → `{p: publishedAt, ai: processed, n: attempts}` for dedup, AI retries (max 3) and 14-day cleanup.
+- Rules: `articles`, `market`, `market_history` readable by any signed-in user, never writable by clients; `users/{uid}/**` owner-only; everything else (incl. `meta`) closed.
+- Firestore field names are camelCase and shared between `sync/` and `FirestoreMappers.kt` — change both together.
+- `backend/legacy-n8n/` is the archived n8n + PostgreSQL backend (reference only, unused).
 
 ## Working agreement
 
-The user normally wants a stop-and-ask workflow: before architectural changes, n8n payload changes, new dependencies, DB schema changes or auth-screen rewrites, present 2 options with pros/cons and wait for approval; deliver one fix/feature at a time. Keep code minimal and pragmatic.
+The user normally wants a stop-and-ask workflow: before architectural changes, Firestore schema / sync payload changes, new dependencies, Room schema changes or auth-screen rewrites, present 2 options with pros/cons and wait for approval; deliver one fix/feature at a time. Keep code minimal and pragmatic.

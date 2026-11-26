@@ -104,6 +104,38 @@ UPDATE articles SET category = CASE lower(category)
 END
 WHERE category <> lower(category) OR lower(category) = 'technology';
 
+-- 10. Market Pulse: cursuri valutare live (actualizate de workflow 1, ramura „Curs valutar”)
+--     + impactul estimat de AI al fiecărei știri asupra unei perechi valutare.
+CREATE TABLE IF NOT EXISTS market_rates (
+    pair VARCHAR(16) PRIMARY KEY,            -- 'EUR/RON', 'USD/RON', 'BTC/USD'
+    rate NUMERIC(20,8) NOT NULL,
+    change_percent NUMERIC(10,4),            -- față de ziua BCE anterioară (fiat) / ultimele 24h (crypto)
+    source VARCHAR(40) NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS affected_currency VARCHAR(16);
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS market_sentiment VARCHAR(8)
+    CHECK (market_sentiment IN ('UP', 'DOWN', 'NEUTRAL'));
+ALTER TABLE articles ADD COLUMN IF NOT EXISTS market_impact_note TEXT;
+CREATE INDEX IF NOT EXISTS idx_articles_market ON articles(published_at DESC)
+    WHERE affected_currency IS NOT NULL;
+
+-- 11. Istoricul cursurilor (graficul widget-ului valutar). Workflow 1 adaugă un punct la minut la
+--     fiecare actualizare din market_rates (păstrat 30 de zile) și puncte zilnice (is_daily = TRUE:
+--     BCE pe 5 ani, BTC pe 365 de zile; păstrate 5 ani) pentru intervalele 1 A / Max.
+--     Indexul unic servește și interogarea (pair, recorded_at DESC) și ON CONFLICT.
+CREATE TABLE IF NOT EXISTS market_rate_history (
+    id BIGSERIAL PRIMARY KEY,
+    pair VARCHAR(16) NOT NULL,
+    rate NUMERIC(20,8) NOT NULL,
+    recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_market_rate_history_pair_time
+    ON market_rate_history(pair, recorded_at DESC);
+CREATE INDEX IF NOT EXISTS idx_market_rate_history_time ON market_rate_history(recorded_at);
+ALTER TABLE market_rate_history ADD COLUMN IF NOT EXISTS is_daily BOOLEAN NOT NULL DEFAULT FALSE;
+
 -- ==========================================================
 -- Date inițiale (Seed) pentru testare imediată
 -- ==========================================================

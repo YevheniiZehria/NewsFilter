@@ -1,0 +1,17 @@
+{
+  "name": "newsfilter-sync",
+  "private": true,
+  "description": "Job programat (GitHub Actions): RSS BBC + scraping + Gemini + cursuri valutare → Cloud Firestore",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "sync": "node index.mjs",
+    "dry-run": "node --env-file-if-exists=.env index.mjs --dry-run"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.12.1",
+    "firebase-admin": "^14.5.1"
+  }
+}

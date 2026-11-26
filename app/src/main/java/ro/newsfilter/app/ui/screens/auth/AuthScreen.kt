@@ -89,7 +89,7 @@ private val FieldShape = RoundedCornerShape(14.dp)
  * - câmpuri `OutlinedTextField` cu `isError` + text de eroare în română,
  *   validate în timp real (după părăsirea câmpului) și la trimitere;
  * - parolă cu buton de afișare / ascundere;
- * - „Continuă cu Google” (Credential Manager) + selector demonstrativ de rezervă.
+ * - „Continuă cu Google” (Credential Manager → Firebase Authentication).
  *
  * Ecranul este „stateless”: starea vine din [AuthViewModel], iar fluxul Google
  * (care are nevoie de Activity) este pornit prin [onGoogleClick].

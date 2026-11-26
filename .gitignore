@@ -46,3 +46,8 @@ Thumbs.db
 .env
 **/.env
 !.env.example
+
+# Firebase / sync job
+app/google-services.json
+node_modules/
+*service-account*.json

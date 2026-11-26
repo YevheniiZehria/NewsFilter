@@ -1,20 +1,25 @@
 package ro.newsfilter.app.data.repository
 
 import android.util.Log
+import com.google.firebase.Timestamp
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import retrofit2.HttpException
+import kotlinx.coroutines.tasks.await
+import ro.newsfilter.app.core.auth.SessionManager
+import ro.newsfilter.app.core.network.UserFacingException
 import ro.newsfilter.app.core.util.NetworkMonitor
 import ro.newsfilter.app.data.local.dao.NewsDao
-import ro.newsfilter.app.data.remote.NewsApiService
-import ro.newsfilter.app.data.remote.dto.BookmarkRequestDto
-import ro.newsfilter.app.data.remote.dto.DeepDiveRequestDto
-import ro.newsfilter.app.data.remote.dto.FeedbackRequestDto
-import ro.newsfilter.app.data.remote.dto.NewsDto
-import ro.newsfilter.app.data.remote.dto.toDomain
-import ro.newsfilter.app.data.remote.dto.toDomainOrNull
-import ro.newsfilter.app.data.remote.dto.toEntity
+import ro.newsfilter.app.data.local.entity.toDomain
+import ro.newsfilter.app.data.local.entity.toEntity
+import ro.newsfilter.app.data.preferences.UserPreferencesRepository
+import ro.newsfilter.app.data.remote.firestore.FirestorePaths
+import ro.newsfilter.app.data.remote.firestore.toBookmarkData
+import ro.newsfilter.app.data.remote.firestore.toNewsArticleOrNull
 import ro.newsfilter.app.domain.model.NewsArticle
 import ro.newsfilter.app.domain.repository.NewsRepository
 import java.io.IOException
@@ -23,22 +28,26 @@ import javax.inject.Singleton
 
 /**
  * Implementarea [NewsRepository] — punctul în care se întâlnesc stocarea **cloud**
- * (PostgreSQL prin API-ul n8n) și stocarea **locală** (Room).
+ * (Cloud Firestore) și stocarea **locală** (Room).
  *
  * Flux de date (offline-first):
  * ```
- * UI ◄── Flow ── Room (sursa unică de adevăr) ◄── syncFeed() ◄── GET /news (n8n)
- *  │                                                   ▲
- *  └── acțiuni (citit / salvat / vot) ──► Room ──► POST /bookmarks, /feedback
+ * UI ◄── Flow ── Room (sursa unică de adevăr) ◄── syncFeed() ◄── Firestore `articles`
+ *  │                                                   ▲             (scrise de jobul sync/)
+ *  └── acțiuni (citit / salvat / vot) ──► Room ──► users/{uid}/bookmarks, users/{uid}/votes
  * ```
  * - Aplicația pornește instantaneu din cache; sincronizarea rulează în fundal
  *   (la deschidere, pull-to-refresh, periodic prin `NewsSyncWorker`).
- * - Starea personală (citit, vot) trăiește în Room; favoritele sunt și pe server,
+ * - Sincronizarea este **incrementală** (doar documentele cu `updatedAt` mai nou decât ultima
+ *   sincronizare), ca numărul de citiri să rămână mic (planul gratuit: 50.000 / zi).
+ * - Starea personală (citit, vot) trăiește în Room; favoritele și voturile sunt și în Firestore,
  *   ca să revină după reautentificare / pe alt dispozitiv.
  */
 @Singleton
 class NewsRepositoryImpl @Inject constructor(
-    private val apiService: NewsApiService,
+    private val firestore: FirebaseFirestore,
+    private val sessionManager: SessionManager,
+    private val preferences: UserPreferencesRepository,
     private val newsDao: NewsDao,
     private val networkMonitor: NetworkMonitor
 ) : NewsRepository {
@@ -46,53 +55,65 @@ class NewsRepositoryImpl @Inject constructor(
     override fun observeFeed(categories: List<String>): Flow<List<NewsArticle>> =
         newsDao.observeFeed(categories, FEED_LIMIT).map { list -> list.map { it.toDomain() } }
 
+    /**
+     * Sincronizează toate categoriile (Room filtrează după [categories] și timpul de lectură),
+     * deci schimbarea categoriilor nu cere citiri noi. [maxMinutes] nu influențează cererea.
+     */
     override suspend fun syncFeed(categories: List<String>, maxMinutes: Int) {
         ensureOnline()
-        val exclude = newsDao.getRecentReadIds(MAX_EXCLUDE_IDS)
-            .takeIf { it.isNotEmpty() }
-            ?.joinToString(",")
+        requireUid()
+        val articles = firestore.collection(FirestorePaths.ARTICLES)
+        val lastSync = preferences.lastFeedSync()
+        val docs = mutableListOf<DocumentSnapshot>()
 
-        val remote = apiService.getNews(
-            categories = categories.joinToString(","),
-            maxMinutes = maxMinutes,
-            exclude = exclude
-        )
-        val saved = upsertKeepingLocalState(remote, serverBookmarksWin = false)
-        Log.d(TAG, "Sincronizare feed: ${remote.size} primite, $saved salvate în cache")
+        if (lastSync == 0L) {
+            // Prima sincronizare (cont nou / după deconectare): doar cele mai recente știri.
+            docs += articles.orderBy(UPDATED_AT, Query.Direction.DESCENDING)
+                .limit(INITIAL_LIMIT).get().await().documents
+        } else {
+            var cursor = lastSync.toTimestamp()
+            for (page in 0 until MAX_PAGES) {
+                val batch = articles.whereGreaterThan(UPDATED_AT, cursor)
+                    .orderBy(UPDATED_AT).limit(PAGE_SIZE).get().await().documents
+                docs += batch
+                if (batch.size < PAGE_SIZE) break
+                cursor = batch.last().getTimestamp(UPDATED_AT) ?: break
+            }
+        }
+
+        val saved = upsertKeepingLocalState(docs.mapNotNull { it.toNewsArticleOrNull() }, serverBookmarksWin = false)
+        docs.mapNotNull { it.getTimestamp(UPDATED_AT) }.maxOrNull()?.let { preferences.setLastFeedSync(it.toMicros()) }
+        Log.d(TAG, "Sincronizare feed: ${docs.size} documente citite, $saved salvate în cache")
     }
 
     override suspend fun syncBookmarks() {
         ensureOnline()
-        val saved = upsertKeepingLocalState(apiService.getBookmarks(), serverBookmarksWin = true)
+        val docs = userCollection(FirestorePaths.BOOKMARKS).get().await().documents
+        val saved = upsertKeepingLocalState(docs.mapNotNull { it.toNewsArticleOrNull(isBookmarked = true) }, serverBookmarksWin = true)
         Log.d(TAG, "Sincronizare favorite: $saved articole")
-    }
-
-    override suspend fun requestServerRefresh(): Boolean {
-        ensureOnline()
-        val response = apiService.forceRefresh()
-        return when {
-            response.isSuccessful -> true
-            response.code() == 429 -> false
-            else -> throw HttpException(response)
-        }
     }
 
     override suspend fun requestDeepDive(articleId: String): String {
         newsDao.getArticleById(articleId)?.deepDive?.takeIf { it.isNotBlank() }?.let { return it }
         ensureOnline()
-        val text = apiService.deepDive(DeepDiveRequestDto(articleId)).deepDive.trim()
-        if (text.isEmpty()) throw IOException("Analiza AI este goală")
+        val doc = firestore.collection(FirestorePaths.ARTICLES).document(articleId).get().await()
+        val text = doc.getString("deepDive")?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw UserFacingException(
+                "Aprofundarea pentru acest articol nu este încă gata. Analiza AI se generează automat — revino în câteva minute."
+            )
         newsDao.setDeepDive(articleId, text)
         return text
     }
 
     override suspend fun sendFeedback(articleId: String, isPositive: Boolean) {
         try {
-            apiService.sendFeedback(FeedbackRequestDto(articleId = articleId, isPositive = isPositive))
+            userCollection(FirestorePaths.VOTES).document(articleId)
+                .set(mapOf("positive" to isPositive, "votedAt" to FieldValue.serverTimestamp()))
+                .await()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "Feedback-ul nu a putut fi trimis: ${e.message}")
+            Log.w(TAG, "Votul nu a putut fi salvat în Firestore: ${e.message}")
         }
     }
 
@@ -109,11 +130,18 @@ class NewsRepositoryImpl @Inject constructor(
     override suspend fun setBookmarked(articleId: String, bookmarked: Boolean): Boolean {
         newsDao.setBookmarked(articleId, bookmarked)
         return try {
-            apiService.setBookmark(BookmarkRequestDto(articleId, bookmarked)).isSuccessful
+            val ref = userCollection(FirestorePaths.BOOKMARKS).document(articleId)
+            if (bookmarked) {
+                val article = newsDao.getArticleById(articleId)?.toDomain() ?: return false
+                ref.set(article.toBookmarkData()).await()
+            } else {
+                ref.delete().await()
+            }
+            true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "Favoritul nu a putut fi sincronizat cu serverul: ${e.message}")
+            Log.w(TAG, "Favoritul nu a putut fi sincronizat cu Firestore: ${e.message}")
             false
         }
     }
@@ -133,14 +161,12 @@ class NewsRepositoryImpl @Inject constructor(
 
     /**
      * Salvează articolele primite păstrând starea locală (citit, vot, analiza descărcată).
-     * Favoritele: la /news decide starea locală (acțiunea utilizatorului e mai nouă);
-     * la /bookmarks decide serverul ([serverBookmarksWin]).
-     * @return numărul de articole valide salvate (cele incomplete sunt ignorate)
+     * Favoritele: la feed decide starea locală (acțiunea utilizatorului e mai nouă);
+     * la favoritele contului decide Firestore ([serverBookmarksWin]).
+     * @return numărul de articole salvate
      */
-    private suspend fun upsertKeepingLocalState(remote: List<NewsDto>, serverBookmarksWin: Boolean): Int {
-        val articles = remote.mapNotNull { it.toDomainOrNull() }
+    private suspend fun upsertKeepingLocalState(articles: List<NewsArticle>, serverBookmarksWin: Boolean): Int {
         if (articles.isEmpty()) return 0
-
         val existing = newsDao.getArticlesByIds(articles.map { it.id }).associateBy { it.id }
         val entities = articles.map { article ->
             val local = existing[article.id]
@@ -155,7 +181,13 @@ class NewsRepositoryImpl @Inject constructor(
         return entities.size
     }
 
-    /** Evită așteptarea timeout-ului de conectare când dispozitivul e clar offline. */
+    private fun requireUid(): String =
+        sessionManager.currentUid ?: throw UserFacingException("Sesiunea a expirat. Autentifică-te din nou.")
+
+    private fun userCollection(name: String) =
+        firestore.collection(FirestorePaths.USERS).document(requireUid()).collection(name)
+
+    /** Evită așteptarea timeout-ului când dispozitivul e clar offline. */
     private fun ensureOnline() {
         if (!networkMonitor.isCurrentlyOnline()) throw IOException("Dispozitivul este offline")
     }
@@ -163,8 +195,13 @@ class NewsRepositoryImpl @Inject constructor(
     private companion object {
         const val TAG = "NewsFilter"
         const val FEED_LIMIT = 50
+        const val UPDATED_AT = "updatedAt"
+        const val INITIAL_LIMIT = 200L
+        const val PAGE_SIZE = 200L
+        const val MAX_PAGES = 3
 
-        /** ~150 × 37 caractere ≈ 5,5 KB: încape sigur în URL-ul cererii GET /news. */
-        const val MAX_EXCLUDE_IDS = 150
+        /** Timestamp-urile Firestore au precizie de microsecunde: le păstrăm exact (fără re-citiri). */
+        fun Timestamp.toMicros(): Long = seconds * 1_000_000 + nanoseconds / 1_000
+        fun Long.toTimestamp(): Timestamp = Timestamp(this / 1_000_000, ((this % 1_000_000) * 1_000).toInt())
     }
 }

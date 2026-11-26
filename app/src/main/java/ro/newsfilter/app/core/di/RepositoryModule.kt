@@ -5,8 +5,10 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import ro.newsfilter.app.data.repository.AuthRepositoryImpl
+import ro.newsfilter.app.data.repository.MarketRepositoryImpl
 import ro.newsfilter.app.data.repository.NewsRepositoryImpl
 import ro.newsfilter.app.domain.repository.AuthRepository
+import ro.newsfilter.app.domain.repository.MarketRepository
 import ro.newsfilter.app.domain.repository.NewsRepository
 import javax.inject.Singleton
 
@@ -33,4 +35,10 @@ abstract class RepositoryModule {
     abstract fun bindAuthRepository(
         impl: AuthRepositoryImpl
     ): AuthRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindMarketRepository(
+        impl: MarketRepositoryImpl
+    ): MarketRepository
 }

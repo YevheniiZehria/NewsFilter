@@ -1,7 +1,11 @@
 package ro.newsfilter.app.core.auth
 
 import android.util.Log
-import kotlinx.coroutines.runBlocking
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import ro.newsfilter.app.data.local.dao.NewsDao
 import ro.newsfilter.app.data.preferences.UserPreferencesRepository
 import ro.newsfilter.app.domain.model.User
@@ -9,69 +13,67 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Sursa unică pentru sesiunea utilizatorului (token-ul emis de n8n).
+ * Sursa unică pentru sesiunea utilizatorului, construită peste **Firebase Authentication**.
  *
- * - Token-ul este păstrat **criptat** ([TokenCipher]) în DataStore și în clar doar în memorie,
- *   pentru [ro.newsfilter.app.core.network.AuthInterceptor].
- * - [endSession] șterge sesiunea ȘI datele personale din Room (favorite, istoric, voturi),
- *   ca un alt cont autentificat pe același telefon să nu le vadă. Favoritele revin din
- *   server la următoarea autentificare (GET /bookmarks).
- * - Activity-urile observă `isLoggedIn` din DataStore și navighează singure.
+ * - Firebase păstrează și reîmprospătează singur credențialele (token-ul ID expiră la o oră);
+ *   aplicația nu mai gestionează niciun token.
+ * - În DataStore păstrăm doar o oglindă a profilului (UID, email, nume, metodă), pe care
+ *   Activity-urile o observă (`isLoggedIn`) pentru a naviga singure.
+ * - [endSession] deconectează din Firebase ȘI șterge datele personale din Room (favorite,
+ *   istoric, voturi), ca un alt cont de pe același telefon să nu le vadă. Favoritele revin din
+ *   Firestore (`users/{uid}/bookmarks`) la următoarea autentificare.
+ * - [start] (apelat din `NewsFilterApp`) urmărește starea Firebase: dacă Firebase nu mai are
+ *   utilizator (cont șters / dezactivat, date șterse) dar DataStore încă îl are, sesiunea se
+ *   încheie automat și UI-ul revine la autentificare.
  */
 @Singleton
 class SessionManager @Inject constructor(
+    private val auth: FirebaseAuth,
     private val preferences: UserPreferencesRepository,
-    private val newsDao: NewsDao,
-    private val cipher: TokenCipher
+    private val newsDao: NewsDao
 ) {
-    @Volatile private var cachedToken: String? = null
-    @Volatile private var loaded = false
-    private val lock = Any()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var started = false
 
-    /**
-     * Token-ul curent sau null. Apelat din thread-urile OkHttp; prima apelare citește
-     * DataStore (blocant, dar niciodată pe thread-ul UI).
-     */
-    fun currentToken(): String? {
-        if (!loaded) {
-            synchronized(lock) {
-                if (!loaded) {
-                    cachedToken = runBlocking { preferences.encryptedSessionToken() }?.let(cipher::decrypt)
-                    loaded = true
+    /** UID-ul utilizatorului Firebase curent, sau null. */
+    val currentUid: String? get() = auth.currentUser?.uid
+
+    /** Pornește sincronizarea Firebase → DataStore. Idempotentă. */
+    fun start() {
+        if (started) return
+        started = true
+        // Firebase restaurează utilizatorul sincron, de pe disc. Fără utilizator → nicio dată
+        // personală nu trebuie să rămână (inclusiv cache-ul unei sesiuni n8n din versiunea veche).
+        if (auth.currentUser == null) scope.launch { clearLocalData() }
+        auth.addAuthStateListener { firebaseAuth ->
+            val user = firebaseAuth.currentUser
+            scope.launch {
+                val savedUid = preferences.firebaseUid()
+                if (user == null && savedUid != null) {
+                    Log.w(TAG, "Sesiunea Firebase nu mai există — deconectare")
+                    clearLocalData()
+                } else if (user != null && savedUid != null && savedUid != user.uid) {
+                    // Alt cont decât cel salvat (nu ar trebui să se întâmple) → pornim curat.
+                    clearLocalData()
                 }
             }
         }
-        return cachedToken
     }
 
-    /** Salvează sesiunea nouă. Aruncă excepție dacă Keystore-ul nu poate cripta token-ul. */
-    suspend fun startSession(user: User, token: String) {
-        val encrypted = cipher.encrypt(token)
-        preferences.saveSession(user.email, user.name, user.provider.key, encrypted)
-        synchronized(lock) {
-            cachedToken = token
-            loaded = true
-        }
+    /** Salvează profilul după o autentificare Firebase reușită. */
+    suspend fun startSession(uid: String, user: User) {
+        preferences.saveSession(uid, user.email, user.name, user.provider.key)
     }
 
-    /** Deconectare locală: sesiune + date personale din cache. Idempotentă. */
+    /** Deconectare: Firebase + sesiune locală + date personale din cache. Idempotentă. */
     suspend fun endSession() {
-        synchronized(lock) {
-            cachedToken = null
-            loaded = true
-        }
+        auth.signOut()
+        clearLocalData()
+    }
+
+    private suspend fun clearLocalData() {
         preferences.clearSession()
         newsDao.clearAll()
-    }
-
-    /**
-     * Serverul a respins [rejectedToken] (401): sesiune revocată, expirată sau cont șters.
-     * Dacă între timp s-a pornit o sesiune nouă, nu o atingem.
-     */
-    fun onUnauthorized(rejectedToken: String) {
-        if (currentToken() != rejectedToken) return
-        Log.w(TAG, "Sesiunea a fost respinsă de server (401) — deconectare")
-        runBlocking { endSession() }
     }
 
     private companion object {

@@ -11,7 +11,7 @@ import ro.newsfilter.app.data.local.entity.NewsEntity
  * DAO (Data Access Object) pentru operații pe tabela "news".
  *
  * Decizie tehnică (offline-first): UI-ul observă tabela prin Flow-uri reactive, iar
- * sincronizarea cu n8n doar scrie în tabelă. Orice modificare (articole noi, citit,
+ * sincronizarea cu Firestore doar scrie în tabelă. Orice modificare (articole noi, citit,
  * salvat) apare automat pe ecran, fără reîncărcări manuale.
  */
 @Dao
@@ -69,11 +69,29 @@ interface NewsDao {
     suspend fun setDeepDive(articleId: String, deepDive: String)
 
     /**
-     * ID-urile celor mai recente articole citite, trimise la GET /news ca `exclude`.
-     * Plafonate: lista completă ar depăși lungimea maximă a unui URL după câteva săptămâni.
+     * Cea mai recentă știre cu impact valutar clar (UP / DOWN) — bannerul Market Pulse.
+     * Calculată local din cache, fără citiri suplimentare din Firestore.
      */
-    @Query("SELECT id FROM news WHERE is_read = 1 ORDER BY published_at DESC LIMIT :limit")
-    suspend fun getRecentReadIds(limit: Int): List<String>
+    @Query(
+        """
+        SELECT * FROM news
+        WHERE affected_currency IS NOT NULL AND market_sentiment IN ('UP', 'DOWN')
+        ORDER BY published_at DESC
+        LIMIT 1
+        """
+    )
+    fun observeLatestMarketEvent(): Flow<NewsEntity?>
+
+    /** Știrile cu impact UP / DOWN pentru o pereche (punctele-știre de pe grafic), cele mai noi primele. */
+    @Query(
+        """
+        SELECT * FROM news
+        WHERE affected_currency = :pair AND market_sentiment IN ('UP', 'DOWN')
+        ORDER BY published_at DESC
+        LIMIT :limit
+        """
+    )
+    suspend fun getMarketEvents(pair: String, limit: Int): List<NewsEntity>
 
     /**
      * Șterge articolele din cache nesincronizate de la [olderThan] încoace (`cached_at` se

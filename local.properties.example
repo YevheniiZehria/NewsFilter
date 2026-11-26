@@ -4,14 +4,5 @@
 # Calea către Android SDK (Android Studio o completează automat)
 sdk.dir=/path/to/Android/sdk
 
-# URL-ul de bază al webhook-urilor n8n (trebuie să se termine cu "/").
-# Dacă lipsește, se folosește http://10.0.2.2:5678/webhook/ (n8n local văzut din emulator).
-N8N_BASE_URL=http://10.0.2.2:5678/webhook/
-
-# Cheia trimisă în header-ul X-API-Key. Trebuie să fie identică cu N8N_API_KEY din backend/.env.
-N8N_API_KEY=change-me
-
-# Clerk OAuth (Google Sign-In). Frontend API domain, fără https:// (ex. xxxx.clerk.accounts.dev)
-# și Client ID-ul aplicației OAuth publice (PKCE) cu redirect URI: newsfilter://oauth-callback
-CLERK_DOMAIN=
-CLERK_CLIENT_ID=
+# Backend-ul (Firebase Auth + Cloud Firestore) se configurează prin app/google-services.json
+# (vezi FIREBASE_SETUP.md), nu aici.

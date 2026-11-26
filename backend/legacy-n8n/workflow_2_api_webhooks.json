@@ -584,7 +584,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT a.id::text AS id, a.title, a.source, a.image_url, a.summary, a.article_url,\n  a.read_time_minutes, a.category,\n  to_char(a.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS published_at,\n  a.full_content, a.ai_summary, a.ai_bullets, a.ai_tags, a.deep_dive,\n  (bm.user_id IS NOT NULL) AS is_bookmarked\nFROM articles a\nLEFT JOIN bookmarks bm ON bm.article_id = a.id AND bm.user_id = $1::uuid\nORDER BY a.published_at DESC\nLIMIT 500;",
+        "query": "SELECT a.id::text AS id, a.title, a.source, a.image_url, a.summary, a.article_url,\n  a.read_time_minutes, a.category,\n  to_char(a.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS published_at,\n  a.full_content, a.ai_summary, a.ai_bullets, a.ai_tags, a.deep_dive,\n  a.affected_currency, a.market_sentiment, a.market_impact_note,\n  (bm.user_id IS NOT NULL) AS is_bookmarked\nFROM articles a\nLEFT JOIN bookmarks bm ON bm.article_id = a.id AND bm.user_id = $1::uuid\nORDER BY a.published_at DESC\nLIMIT 500;",
         "options": {
           "queryReplacement": "={{ [$json.user_id] }}"
         }
@@ -727,7 +727,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT a.id::text AS id, a.title, a.source, a.image_url, a.summary, a.article_url,\n  a.read_time_minutes, a.category,\n  to_char(a.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS published_at,\n  a.full_content, a.ai_summary, a.ai_bullets, a.ai_tags, a.deep_dive,\n  TRUE AS is_bookmarked\nFROM bookmarks bm\nJOIN articles a ON a.id = bm.article_id\nWHERE bm.user_id = $1::uuid\nORDER BY bm.created_at DESC\nLIMIT 300;",
+        "query": "SELECT a.id::text AS id, a.title, a.source, a.image_url, a.summary, a.article_url,\n  a.read_time_minutes, a.category,\n  to_char(a.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS published_at,\n  a.full_content, a.ai_summary, a.ai_bullets, a.ai_tags, a.deep_dive,\n  a.affected_currency, a.market_sentiment, a.market_impact_note,\n  TRUE AS is_bookmarked\nFROM bookmarks bm\nJOIN articles a ON a.id = bm.article_id\nWHERE bm.user_id = $1::uuid\nORDER BY bm.created_at DESC\nLIMIT 300;",
         "options": {
           "queryReplacement": "={{ [$json.user_id] }}"
         }
@@ -1271,6 +1271,262 @@
       "position": [
         640,
         2160
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "market-pulse",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook GET /market-pulse",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-market-pulse-get",
+      "id": "2f0e4db4-96a6-491c-9e76-940744784aa9",
+      "position": [
+        200,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook GET /market-pulse').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /market-pulse",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "3fb90c22-0311-46bd-a807-e52e8aa27e93",
+      "position": [
+        420,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Sesiune validă = token cunoscut, nerevocat, neexpirat (utilizatorul șters → sesiunile dispar prin CASCADE)\nUPDATE sessions SET last_used_at = NOW()\nWHERE token_hash = encode(digest($1, 'sha256'), 'hex')\n  AND revoked_at IS NULL\n  AND expires_at > NOW()\nRETURNING user_id::text AS user_id;",
+        "options": {
+          "queryReplacement": "={{ [($('Webhook GET /market-pulse').first().json.headers.authorization || '').replace(/^Bearer\\s+/i, '')] }}"
+        }
+      },
+      "name": "Sesiune /market-pulse",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "05d851b3-5aaf-40c4-a1e1-47bab5521398",
+      "position": [
+        640,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.user_id }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Sesiune validă /market-pulse",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "f92edad7-c507-4831-9c21-1c5713ae8947",
+      "position": [
+        860,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Un singur rând: cursurile curente + cea mai recentă știre cu impact clar (UP / DOWN) din ultimele 48h.\nSELECT json_build_object(\n  'rates', COALESCE((\n    SELECT json_agg(json_build_object(\n      'pair', pair,\n      'source', source,\n      'rate', rate::float8,\n      'change_percent', change_percent::float8,\n      'updated_at', to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')\n    ) ORDER BY pair)\n    FROM market_rates\n  ), '[]'::json),\n  'latest_event', (\n    SELECT json_build_object(\n      'article_id', id::text,\n      'title', title,\n      'article_url', article_url,\n      'affected_currency', affected_currency,\n      'market_sentiment', market_sentiment,\n      'market_impact_note', market_impact_note,\n      'published_at', to_char(published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')\n    )\n    FROM articles\n    WHERE affected_currency IS NOT NULL\n      AND market_sentiment IN ('UP', 'DOWN')\n      AND published_at > NOW() - INTERVAL '48 hours'\n    ORDER BY published_at DESC\n    LIMIT 1\n  )\n) AS body;",
+        "options": {}
+      },
+      "name": "Query market pulse",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "id": "2e8ba1f6-6804-4e51-907b-a44ea01e9b88",
+      "position": [
+        1080,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 200
+        }
+      },
+      "name": "Răspuns /market-pulse",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "569e0187-b4bd-4756-83d4-219a76383c74",
+      "position": [
+        1300,
+        2400
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "market-history",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook GET /market-history",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-market-history-get",
+      "id": "0cdb45b4-37b1-439a-982e-c3ab327818f4",
+      "position": [
+        200,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook GET /market-history').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /market-history",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "de7ed519-5244-428e-af4b-cd0111993546",
+      "position": [
+        420,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Sesiune validă = token cunoscut, nerevocat, neexpirat (utilizatorul șters → sesiunile dispar prin CASCADE)\nUPDATE sessions SET last_used_at = NOW()\nWHERE token_hash = encode(digest($1, 'sha256'), 'hex')\n  AND revoked_at IS NULL\n  AND expires_at > NOW()\nRETURNING user_id::text AS user_id;",
+        "options": {
+          "queryReplacement": "={{ [($('Webhook GET /market-history').first().json.headers.authorization || '').replace(/^Bearer\\s+/i, '')] }}"
+        }
+      },
+      "name": "Sesiune /market-history",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "7a1b1b49-3eb5-46b6-9885-52db5bf5001c",
+      "position": [
+        640,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.user_id }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Sesiune validă /market-history",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "5a55ec37-6d84-4545-b716-10a1321b5897",
+      "position": [
+        860,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Seria unei perechi pe interval, agregată pe găleți (max. ~260 de puncte), + știrile UP / DOWN din interval.\nWITH params AS (\n  SELECT $1::text AS pair, $2::text AS rng,\n    CASE $2 WHEN '1d' THEN INTERVAL '24 hours' WHEN '5d' THEN INTERVAL '5 days'\n            WHEN '1y' THEN INTERVAL '365 days' WHEN 'max' THEN INTERVAL '5 years'\n            ELSE INTERVAL '30 days' END AS span,\n    CASE $2 WHEN '1d' THEN INTERVAL '10 minutes' WHEN '5d' THEN INTERVAL '30 minutes'\n            WHEN '1y' THEN INTERVAL '1 day' WHEN 'max' THEN INTERVAL '7 days'\n            ELSE INTERVAL '4 hours' END AS bucket\n), pts AS (\n  SELECT date_bin(p.bucket, h.recorded_at, TIMESTAMPTZ '2000-01-03 00:00:00+00') AS ts, avg(h.rate)::float8 AS rate\n  FROM market_rate_history h CROSS JOIN params p\n  WHERE h.pair = p.pair AND h.recorded_at > NOW() - p.span\n  GROUP BY 1\n), ev AS (\n  SELECT a.id, a.title, a.article_url, a.market_sentiment, a.market_impact_note, a.published_at\n  FROM articles a CROSS JOIN params p\n  WHERE a.affected_currency = p.pair\n    AND a.market_sentiment IN ('UP', 'DOWN')\n    AND a.published_at > NOW() - p.span\n  ORDER BY a.published_at DESC\n  LIMIT 30\n)\nSELECT json_build_object(\n  'pair', (SELECT pair FROM params),\n  'range', (SELECT rng FROM params),\n  'points', COALESCE((\n    SELECT json_agg(json_build_object(\n      'timestamp', to_char(ts AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'),\n      'rate', rate\n    ) ORDER BY ts) FROM pts\n  ), '[]'::json),\n  'events', COALESCE((\n    SELECT json_agg(json_build_object(\n      'article_id', id::text,\n      'title', title,\n      'article_url', article_url,\n      'market_sentiment', market_sentiment,\n      'market_impact_note', market_impact_note,\n      'timestamp', to_char(published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"')\n    ) ORDER BY published_at) FROM ev\n  ), '[]'::json)\n) AS body;",
+        "options": {
+          "queryReplacement": "={{ (() => { const q = $('Webhook GET /market-history').first().json.query || {}; const pair = String(q.pair || '').toUpperCase().replace(/\\s+/g, ''); const legacy = { '24h': '1d', '7d': '5d', '30d': '1m' }; const raw = String(q.range || '').toLowerCase(); const range = legacy[raw] || raw; return [['EUR/RON', 'USD/RON', 'BTC/USD'].includes(pair) ? pair : 'USD/RON', ['1d', '5d', '1m', '1y', 'max'].includes(range) ? range : '1m']; })() }}"
+        }
+      },
+      "name": "Query istoric curs",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "id": "ab6fce14-b7d9-4b32-ada4-c34b89c8addc",
+      "position": [
+        1080,
+        2640
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 200
+        }
+      },
+      "name": "Răspuns /market-history",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "523dbb36-c2de-40fd-9c66-6c540258e9c2",
+      "position": [
+        1300,
+        2640
       ]
     }
   ],
@@ -1938,6 +2194,144 @@
         [
           {
             "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook GET /market-pulse": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /market-pulse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /market-pulse": {
+      "main": [
+        [
+          {
+            "node": "Sesiune /market-pulse",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune /market-pulse": {
+      "main": [
+        [
+          {
+            "node": "Sesiune validă /market-pulse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune validă /market-pulse": {
+      "main": [
+        [
+          {
+            "node": "Query market pulse",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 401 sesiune invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query market pulse": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /market-pulse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook GET /market-history": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /market-history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /market-history": {
+      "main": [
+        [
+          {
+            "node": "Sesiune /market-history",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune /market-history": {
+      "main": [
+        [
+          {
+            "node": "Sesiune validă /market-history",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune validă /market-history": {
+      "main": [
+        [
+          {
+            "node": "Query istoric curs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 401 sesiune invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query istoric curs": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /market-history",
             "type": "main",
             "index": 0
           }

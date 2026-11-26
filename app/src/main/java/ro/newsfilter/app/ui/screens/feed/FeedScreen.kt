@@ -49,6 +49,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -60,6 +63,7 @@ import ro.newsfilter.app.ui.components.CompactNewsCard
 import ro.newsfilter.app.ui.components.ErrorView
 import ro.newsfilter.app.ui.components.HeroNewsCard
 import ro.newsfilter.app.ui.components.LoadingShimmer
+import ro.newsfilter.app.ui.components.MarketWidgetCard
 import ro.newsfilter.app.ui.components.OfflineBanner
 import ro.newsfilter.app.ui.components.ScreenHeader
 import ro.newsfilter.app.ui.components.StatusView
@@ -80,7 +84,8 @@ import java.util.Locale
  *  - atingere pe card → detaliu; apăsare lungă → [ArticleActionsSheet] (meniu contextual);
  *  - meniul „⋮” din antet: reîmprospătare, resetarea istoricului de citire, deconectare;
  *  - scuturarea telefonului ([ShakeToRefreshEffect]) → pachet nou + vibrație + Snackbar;
- *  - pull-to-refresh.
+ *  - pull-to-refresh;
+ *  - widget-ul valutar ([MarketWidgetCard]: curs, grafic, convertor) sub antet, actualizat la 30 s cât timp ecranul e vizibil.
  *
  * Insets: aplicăm o singură dată `statusBarsPadding()` pe rădăcină; partea de jos
  * e deja tratată de Scaffold-ul rădăcină (BottomNavBar). Nu mai există un Scaffold
@@ -118,6 +123,24 @@ fun FeedScreen(
             // Un mesaj nou îl înlocuiește pe cel afișat (showSnackbar suspendă până la închidere).
             snackbarHostState.currentSnackbarData?.dismiss()
             launch { snackbarHostState.showSnackbar(message) }
+        }
+    }
+
+    // Market Pulse: cursurile se ascultă în timp real doar cât timp ecranul este vizibil (STARTED).
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.collectMarketPulse()
+        }
+    }
+
+    // Bannerul Market Pulse: detaliul articolului (din cache) sau link-ul original.
+    LaunchedEffect(Unit) {
+        viewModel.marketEventTargets.collect { target ->
+            when (target) {
+                is MarketEventTarget.Detail -> onArticleClick(target.articleId)
+                is MarketEventTarget.Browser -> ArticleIntents.openInBrowser(context, target.url, toolbarColor)
+            }
         }
     }
 
@@ -178,7 +201,26 @@ fun FeedScreen(
                         )
                     }
 
-                    // === 2. Conținut: cele mai recente știri ===
+                    // === 2. Widget valutar: curs + grafic + convertor + știrea care mișcă piața ===
+                    uiState.marketPulse?.let { pulse ->
+                        item(key = "market_widget") {
+                            MarketWidgetCard(
+                                pulse = pulse,
+                                isPulseStale = uiState.marketPulseStale,
+                                widget = uiState.marketWidget,
+                                onPairSelect = viewModel::selectMarketPair,
+                                onSwap = viewModel::swapMarketDirection,
+                                onRangeSelect = viewModel::selectMarketRange,
+                                onEventClick = viewModel::openMarketEvent,
+                                onChartEventClick = viewModel::openChartEvent,
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp)
+                                    .animateItem()
+                            )
+                        }
+                    }
+
+                    // === 3. Conținut: cele mai recente știri ===
                     when (contentState) {
                         FeedContent.Loading -> item(key = "loading") {
                             LoadingShimmer(
@@ -338,10 +380,10 @@ private fun FeedOverflowMenu(
                     onRefresh()
                 }
             )
-            // App → n8n: rulează acum workflow-ul de ingestie (RSS → scraping → rezumate AI).
+            // Resincronizare imediată din Firestore (sursele se procesează automat la 30 de minute).
             DropdownMenuItem(
                 text = {
-                    Text(if (isServerRefreshRunning) "Se pornește actualizarea…" else "Forțează actualizarea surselor")
+                    Text(if (isServerRefreshRunning) "Se actualizează…" else "Forțează actualizarea surselor")
                 },
                 leadingIcon = { Icon(Icons.Outlined.CloudSync, contentDescription = null) },
                 enabled = !isServerRefreshRunning,
@@ -378,6 +420,8 @@ private fun FeedOverflowMenu(
 }
 
 private enum class FeedContent { Loading, Error, Empty, List }
+
+/** Intervalul de actualizare Market Pulse cât timp Feed-ul este vizibil. */
 
 /**
  * Salutul în funcție de ora curentă și data formatată în română

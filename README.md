@@ -1,18 +1,19 @@
 # NewsFilter
 
-Aplicație Android care îți livrează un **pachet de știri pe măsura timpului pe care îl ai** (2, 5 sau 15 minute), filtrat după domeniile preferate. Backend: **n8n + PostgreSQL**.
+Aplicație Android care îți livrează un **pachet de știri pe măsura timpului pe care îl ai** (2, 5 sau 15 minute), filtrat după domeniile preferate. Backend: **Firebase** (Authentication + Cloud Firestore, plan gratuit Spark) + un job programat în **GitHub Actions** — 0 €/lună, fără server propriu.
 
-Kotlin · Jetpack Compose · Material 3 · Clean Architecture + MVVM · Hilt · Room · Retrofit · DataStore · WorkManager · Clerk OAuth (PKCE) · Android Keystore
+Kotlin · Jetpack Compose · Material 3 · Clean Architecture + MVVM · Hilt · Room · DataStore · WorkManager · Firebase Auth · Cloud Firestore · Credential Manager · Gemini
 
-Documentația completă: [DOCUMENTATIE.md](DOCUMENTATIE.md).
+Documentația completă: [DOCUMENTATIE.md](DOCUMENTATIE.md) · Configurare Firebase: [FIREBASE_SETUP.md](FIREBASE_SETUP.md).
 
 ## Funcționalități
 
 - **Două Activity-uri:** `AuthActivity` (autentificare, LAUNCHER) → `MainActivity` (Onboarding, Feed, Salvate, Setări, Detaliu).
-- **Autentificare strictă:** email + parolă (bcrypt în PostgreSQL), cont nou, **Continuă cu Google** prin Clerk OAuth 2.0 + PKCE (token-ul este verificat de n8n la Clerk). Serverul emite un **token de sesiune per utilizator** (în DB doar hash-ul SHA-256), păstrat pe telefon criptat cu **Android Keystore** și trimis ca `Authorization: Bearer`. Un 401 (sesiune revocată / expirată / cont șters) deconectează automat. Fără server nu există acces.
-- **Feed offline-first:** lista vine din cache-ul Room (deschidere instantanee, funcționează offline); sincronizarea cu n8n rulează în fundal (la deschidere, pull-to-refresh, la revenirea rețelei și periodic cu WorkManager).
-- **Smart Digest:** n8n + Gemini generează la ingestie 2-3 idei cheie (TL;DR) și etichete, afișate înaintea articolului.
-- **Acțiuni app → n8n:** „Forțează actualizarea surselor” (rulează ingestia acum, limitat la o dată la 3 minute), favorite sincronizate per cont (`POST/GET /bookmarks`), **„Aprofundează subiectul”** (analiză AI generată la cerere, păstrată în cache).
+- **Autentificare Firebase:** email + parolă, cont nou și **Continuă cu Google** (Credential Manager → token ID verificat de Firebase). Datele personale din Firestore sunt protejate de reguli de securitate (`request.auth.uid`). Fără Firebase nu există acces.
+- **Feed offline-first:** lista vine din cache-ul Room (deschidere instantanee, funcționează offline); sincronizarea **incrementală** cu Firestore rulează în fundal (la deschidere, pull-to-refresh, la revenirea rețelei și periodic cu WorkManager).
+- **Smart Digest:** jobul de sincronizare (GitHub Actions, la 30 min) descarcă 6 feed-uri BBC, extrage textul complet și generează cu Gemini 2-3 idei cheie, etichete, impactul pe cursul valutar și **„Aprofundează subiectul”**.
+- **Market Pulse:** EUR/RON, USD/RON, BTC/USD în timp real (listener Firestore), grafic istoric 1 Z – Max cu știrile care au influențat cursul, convertor valutar.
+- **Favorite și voturi per cont** în Firestore (`users/{uid}/bookmarks`, `users/{uid}/votes`), restaurate la autentificare.
 - **Evenimente multiple:** tap pe card → detaliu; **apăsare lungă** → vibrație + meniu contextual (Salvează, Marchează ca citit, Distribuie, Deschide în browser).
 - **Meniu „⋮”:** reîmprospătare, resetarea istoricului de citire, deconectare.
 - **Senzor:** „Scutură pentru știri noi” (accelerometru, cu debouncing), comutator în Setări.
@@ -23,47 +24,26 @@ Documentația completă: [DOCUMENTATIE.md](DOCUMENTATIE.md).
 | Cerință | Pct. | Implementare |
 |---|---|---|
 | ≥ 2 Activity-uri | 10 | [`AuthActivity`](app/src/main/java/ro/newsfilter/app/AuthActivity.kt), [`MainActivity`](app/src/main/java/ro/newsfilter/app/MainActivity.kt), [manifest](app/src/main/AndroidManifest.xml) |
-| Autentificare + validare | 10 | [`ui/screens/auth/`](app/src/main/java/ro/newsfilter/app/ui/screens/auth/), [`AuthRepositoryImpl`](app/src/main/java/ro/newsfilter/app/data/repository/AuthRepositoryImpl.kt), endpoint-urile `POST /auth/login` și `POST /users` |
+| Autentificare + validare | 10 | [`ui/screens/auth/`](app/src/main/java/ro/newsfilter/app/ui/screens/auth/), [`AuthRepositoryImpl`](app/src/main/java/ro/newsfilter/app/data/repository/AuthRepositoryImpl.kt) (Firebase Authentication) |
 | Click, long-click, notificări | 10 | [`NewsCard`](app/src/main/java/ro/newsfilter/app/ui/components/NewsCard.kt) (`combinedClickable`), [`ArticleActionsSheet`](app/src/main/java/ro/newsfilter/app/ui/components/ArticleActionsSheet.kt), [`worker/`](app/src/main/java/ro/newsfilter/app/worker/) |
 | Meniu funcțional | 10 | `FeedOverflowMenu` în [`FeedScreen`](app/src/main/java/ro/newsfilter/app/ui/screens/feed/FeedScreen.kt) |
-| Stocare locală + cloud | 20 | Room + DataStore ([`data/local`](app/src/main/java/ro/newsfilter/app/data/local/), [`data/preferences`](app/src/main/java/ro/newsfilter/app/data/preferences/)) + PostgreSQL prin n8n ([`backend/`](backend/)) |
+| Stocare locală + cloud | 20 | Room + DataStore ([`data/local`](app/src/main/java/ro/newsfilter/app/data/local/), [`data/preferences`](app/src/main/java/ro/newsfilter/app/data/preferences/)) + Cloud Firestore ([`data/remote/firestore`](app/src/main/java/ro/newsfilter/app/data/remote/firestore/), [`firebase/firestore.rules`](firebase/firestore.rules), [`sync/`](sync/)) |
 | Cod curat / modularitate | 20 | straturi `domain / data / ui / core`, Hilt, interfețe de repository, KDoc |
-| Bonus: Google Sign-In | 5 | [`ClerkOAuthHelper`](app/src/main/java/ro/newsfilter/app/core/auth/ClerkOAuthHelper.kt) + `POST /auth/google` (verificare la Clerk în n8n) |
+| Bonus: Google Sign-In | 5 | [`GoogleSignInHelper`](app/src/main/java/ro/newsfilter/app/core/auth/GoogleSignInHelper.kt) (Credential Manager) + `GoogleAuthProvider` în Firebase |
 | Bonus: senzor | 5 | [`ShakeDetector`](app/src/main/java/ro/newsfilter/app/core/sensor/ShakeDetector.kt) |
 
 ## Rulare
 
-**Backend**
+Pașii completi (proiect Firebase, `google-services.json`, reguli Firestore, secrete GitHub) sunt în [FIREBASE_SETUP.md](FIREBASE_SETUP.md). Pe scurt:
 
 ```bash
-cp backend/.env.example backend/.env   # N8N_API_KEY, POSTGRES_*, GEMINI_API_KEY, CLERK_DOMAIN
-cd backend && docker compose up -d
-```
-
-Variabilele de mediu ale containerului n8n (din `backend/.env`, vezi `docker-compose.yml`):
-
-| Variabilă | Rol |
-|---|---|
-| `N8N_API_KEY` | cheia verificată în header-ul `X-API-Key` (identică cu cea din `local.properties`) |
-| `N8N_BLOCK_ENV_ACCESS_IN_NODE=false` | permite workflow-urilor să citească `$env` (setat în compose) |
-| `GEMINI_API_KEY` | Smart Digest + „Aprofundează subiectul” (opțională) |
-| `CLERK_DOMAIN` | domeniul Frontend API Clerk; n8n verifică token-urile Google la `https://<domeniu>/oauth/userinfo` |
-
-Importă `workflow_1_ingestion_and_processing.json` și `workflow_2_api_webhooks.json` în n8n (înlocuind versiunile vechi), alege credențialele Postgres în nodurile Postgres și activează ambele workflow-uri.
-
-**Actualizare bază de date existentă** — `postgres_schema.sql` este idempotent (rulează automat doar la crearea volumului):
-
-```bash
-cd backend && docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < postgres_schema.sql
-```
-
-**Clerk:** o aplicație OAuth *publică* (PKCE) cu redirect URI `newsfilter://oauth-callback`, scope-uri `openid profile email`, și Google activat ca conexiune socială.
-
-**Aplicația**
-
-```bash
-cp local.properties.example local.properties   # N8N_BASE_URL, N8N_API_KEY, CLERK_DOMAIN, CLERK_CLIENT_ID
+# 1. app/google-services.json descărcat din consola Firebase (pachet ro.newsfilter.app)
+# 2. secretele GitHub FIREBASE_SERVICE_ACCOUNT + GEMINI_API_KEY → Actions → firebase-sync → Run workflow
 ./gradlew assembleDebug
 ```
 
+Test local al jobului de sincronizare (fără scrieri în Firestore): `cd sync && npm ci && node index.mjs --dry-run`.
+
 **Scuturarea pe emulator:** *Extended controls → Virtual sensors*, sau `adb emu sensor set acceleration 30:0:9.8` repetat de câteva ori.
+
+Vechiul backend (n8n + PostgreSQL) este arhivat în [`backend/legacy-n8n/`](backend/legacy-n8n/).

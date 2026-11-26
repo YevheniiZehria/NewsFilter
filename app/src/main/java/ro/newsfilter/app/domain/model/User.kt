@@ -1,7 +1,7 @@
 package ro.newsfilter.app.domain.model
 
 /**
- * Utilizatorul autentificat (profilul din tabela `users`, primit de la n8n).
+ * Utilizatorul autentificat (profilul Firebase, oglindit în `users/{uid}` din Firestore).
  *
  * @property email Email-ul (identificator unic, în litere mici)
  * @property name Numele afișat în aplicație (ex. în salutul din Feed)
@@ -17,7 +17,7 @@ data class User(
         get() = name.trim().substringBefore(' ').ifBlank { email.substringBefore('@') }
 }
 
-/** Metodele de autentificare suportate; [key] este valoarea salvată în DataStore / PostgreSQL. */
+/** Metodele de autentificare suportate; [key] este valoarea salvată în DataStore / Firestore. */
 enum class AuthProvider(val key: String) {
     EMAIL("email"),
     GOOGLE("google");
@@ -27,7 +27,7 @@ enum class AuthProvider(val key: String) {
     }
 }
 
-/** Rezultatul unei operații de autentificare (doar prin server, fără mod offline). */
+/** Rezultatul unei operații de autentificare (doar prin Firebase, fără mod offline). */
 sealed interface AuthResult {
     data class Success(val user: User) : AuthResult
     data class Failure(val message: String) : AuthResult

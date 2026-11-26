@@ -100,7 +100,7 @@ import ro.newsfilter.app.ui.components.ReadTimeLabel
  *  - CTA principal „Citește articolul complet” → Chrome Custom Tabs (performanță
  *    nativă Chrome, cookie-urile utilizatorului, fără WebView propriu), cu fallback
  *    la ACTION_VIEW dacă nu există un browser compatibil;
- *  - bară de acțiuni jos: Like / Dislike (feedback instant + POST /feedback, votul
+ *  - bară de acțiuni jos: Like / Dislike (feedback instant + vot salvat în Firestore, votul
  *    e reținut în Room) și Salvează.
  *
  * Insets: ecranul nu are BottomNavBar. Conținutul trece intenționat pe sub bara
@@ -265,7 +265,7 @@ private fun ArticleContent(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Smart Digest (n8n + Gemini): ideile cheie înaintea articolului complet.
+                // Smart Digest (Gemini, în jobul de sincronizare): ideile cheie înaintea articolului complet.
                 if (article.aiBullets.isNotEmpty() || article.aiTags.isNotEmpty()) {
                     SmartDigestCard(bullets = article.aiBullets, tags = article.aiTags)
                     Spacer(modifier = Modifier.height(20.dp))
@@ -551,7 +551,7 @@ private fun ActionPill(
 }
 
 /**
- * Smart Digest: 2-3 idei cheie (TL;DR) și etichetele de subiect, generate în n8n de Gemini
+ * Smart Digest: 2-3 idei cheie (TL;DR) și etichetele de subiect, generate de Gemini în jobul de sincronizare
  * la ingestie. Afișat înaintea rezumatului, ca cititorul să prindă esențialul în câteva secunde.
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -619,7 +619,7 @@ private fun SmartDigestCard(bullets: List<String>, tags: List<String>) {
 }
 
 /**
- * „Aprofundează subiectul” (app → n8n → Gemini): context, de ce contează, ce urmează.
+ * „Aprofundează subiectul” (pre-generat de Gemini, citit din Firestore): context, de ce contează, ce urmează.
  * Generat la cerere (o singură dată pe server), apoi păstrat local.
  */
 @Composable

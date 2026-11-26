@@ -99,3 +99,13 @@ val CategoryHealth = Color(0xFFFF5722)
 val CategoryEntertainment = Color(0xFFFFC107)
 val CategoryWorld = Color(0xFF607D8B)
 
+
+// === Market Pulse: tendințe de curs (verde = crește, roșu = scade) ===
+val TrendUpLight = Color(0xFF15803D)
+val TrendUpDark = Color(0xFF4ADE80)
+val TrendDownLight = Color(0xFFB91C1C)
+val TrendDownDark = Color(0xFFF87171)
+
+// === Widget valutar: linia graficului (verde = perioadă pe plus, roșu = pe minus) ===
+val ChartUp = Color(0xFF4CAF50)
+val ChartDown = Color(0xFFE53935)

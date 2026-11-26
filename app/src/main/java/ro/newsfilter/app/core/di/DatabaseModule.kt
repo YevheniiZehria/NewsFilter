@@ -15,7 +15,7 @@ import javax.inject.Singleton
  * Modul Hilt pentru furnizarea bazei de date Room și a DAO-urilor.
  *
  * Decizie tehnică: Room funcționează ca cache LOCAL pe dispozitiv,
- * în paralel cu PostgreSQL din n8n (care e baza de date REMOTE).
+ * în paralel cu Cloud Firestore (baza de date REMOTE).
  * fallbackToDestructiveMigration() = în faza de dezvoltare, dacă
  * schimbăm schema, ștergem baza și o recreăm (la producție se face migrare).
  */
@@ -33,7 +33,12 @@ object DatabaseModule {
         )
             // Migrările explicite păstrează favoritele și voturile utilizatorului;
             // fallback-ul distructiv rămâne doar ca plasă de siguranță.
-            .addMigrations(AppDatabase.MIGRATION_1_2, AppDatabase.MIGRATION_2_3, AppDatabase.MIGRATION_3_4)
+            .addMigrations(
+                AppDatabase.MIGRATION_1_2,
+                AppDatabase.MIGRATION_2_3,
+                AppDatabase.MIGRATION_3_4,
+                AppDatabase.MIGRATION_4_5
+            )
             .fallbackToDestructiveMigration()
             .build()
 

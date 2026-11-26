@@ -7,6 +7,7 @@ import android.os.Build
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
+import ro.newsfilter.app.core.auth.SessionManager
 import ro.newsfilter.app.worker.NewsSyncScheduler
 import javax.inject.Inject
 
@@ -25,6 +26,9 @@ class NewsFilterApp : Application(), Configuration.Provider {
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
 
+    @Inject
+    lateinit var sessionManager: SessionManager
+
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()
             .setWorkerFactory(workerFactory)
@@ -33,6 +37,8 @@ class NewsFilterApp : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // Oglindește starea Firebase Auth în DataStore (deconectare automată dacă sesiunea dispare).
+        sessionManager.start()
         // Sincronizare periodică în fundal (offline-first); workerul nu face nimic fără sesiune.
         NewsSyncScheduler.schedulePeriodicSync(this)
     }

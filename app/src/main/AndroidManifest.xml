@@ -51,14 +51,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:host="oauth-callback"
-                    android:scheme="newsfilter" />
-            </intent-filter>
         </activity>
 
         <!-- Activity 2: experiența principală (Onboarding, Feed, Salvate, Setări, Detaliu).

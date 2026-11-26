@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import ro.newsfilter.app.core.auth.ClerkOAuthHelper
+import ro.newsfilter.app.core.auth.GoogleSignInHelper
 import ro.newsfilter.app.data.preferences.UserPreferencesRepository
 import ro.newsfilter.app.domain.model.AuthResult
 import ro.newsfilter.app.domain.repository.AuthRepository
@@ -80,9 +80,9 @@ data class AuthUiState(
  * - verifică la pornire dacă există o sesiune salvată în DataStore ([startupState]);
  * - ține starea formularului și validează câmpurile (email cu `Patterns.EMAIL_ADDRESS`,
  *   parolă ≥ 6 caractere, nume obligatoriu la creare cont);
- * - trimite cererile la [AuthRepository] (n8n + PostgreSQL; fără server nu există acces);
- * - coordonează „Continuă cu Google”: callback-ul Clerk OAuth vine din Activity, iar
- *   access token-ul este verificat de n8n;
+ * - trimite cererile la [AuthRepository] (Firebase Authentication; fără răspuns nu există acces);
+ * - coordonează „Continuă cu Google”: selectorul Credential Manager (pornit din Activity)
+ *   întoarce token-ul ID, verificat apoi de Firebase;
  * - emite [AuthEvent.Authenticated] o singură dată, la succes.
  */
 @HiltViewModel
@@ -106,8 +106,8 @@ class AuthViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     init {
-        // Verificare unică a sesiunii: există token de sesiune salvat → direct la MainActivity.
-        // Dacă serverul îl respinge ulterior (401), sesiunea se încheie automat.
+        // Verificare unică a sesiunii: există sesiune Firebase salvată → direct la MainActivity.
+        // Dacă Firebase o invalidează ulterior, `SessionManager` încheie sesiunea automat.
         viewModelScope.launch {
             val prefs = preferencesRepository.userPreferences.first()
             _startupState.value = if (prefs.isLoggedIn && prefs.userEmail.isNotBlank()) {
@@ -156,23 +156,22 @@ class AuthViewModel @Inject constructor(
         }
     }
 
-    // ---------------- Google (Clerk OAuth) ----------------
+    // ---------------- Google (Credential Manager) ----------------
 
-    fun onGoogleSignInStarted() = _uiState.update { it.copy(isGoogleLoading = true, errorMessage = null) }
-
-    fun onGoogleSignInCancelled() = _uiState.update { it.copy(isGoogleLoading = false) }
-
-    fun onGoogleSignInFailed(message: String) =
-        _uiState.update { it.copy(isGoogleLoading = false, errorMessage = message) }
-
-    /** Rezultatul Clerk OAuth, primit din `AuthActivity` după callback-ul `newsfilter://oauth-callback`. */
-    fun onClerkOAuthResult(result: ClerkOAuthHelper.Result) {
-        when (result) {
-            is ClerkOAuthHelper.Result.Success -> viewModelScope.launch {
-                handleResult(authRepository.signInWithGoogle(result.accessToken))
-            }
-            is ClerkOAuthHelper.Result.Error -> _uiState.update {
-                it.copy(isGoogleLoading = false, errorMessage = result.message)
+    /**
+     * „Continuă cu Google”: [requestIdToken] afișează selectorul de conturi (are nevoie de
+     * Activity, deci vine din `AuthActivity`), apoi token-ul ID este schimbat într-o sesiune Firebase.
+     */
+    fun signInWithGoogle(requestIdToken: suspend () -> GoogleSignInHelper.Result) {
+        if (_uiState.value.isBusy) return
+        _uiState.update { it.copy(isGoogleLoading = true, errorMessage = null) }
+        viewModelScope.launch {
+            when (val result = requestIdToken()) {
+                is GoogleSignInHelper.Result.Success -> handleResult(authRepository.signInWithGoogle(result.idToken))
+                GoogleSignInHelper.Result.Cancelled -> _uiState.update { it.copy(isGoogleLoading = false) }
+                is GoogleSignInHelper.Result.Error -> _uiState.update {
+                    it.copy(isGoogleLoading = false, errorMessage = result.message)
+                }
             }
         }
     }

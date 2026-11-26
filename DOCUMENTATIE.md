@@ -1,6 +1,6 @@
 # NewsFilter — Documentația proiectului
 
-> Aplicație Android care îți livrează un **„pachet de știri” pe măsura timpului pe care îl ai** (2, 5 sau 15 minute), filtrat după categoriile preferate. Backend-ul este construit în **n8n** (workflow-uri low-code) peste o bază de date **PostgreSQL**.
+> Aplicație Android care îți livrează un **„pachet de știri” pe măsura timpului pe care îl ai** (2, 5 sau 15 minute), filtrat după categoriile preferate. Backend-ul rulează **100% gratuit** pe **Firebase** (Authentication + Cloud Firestore, planul Spark), alimentat de un job programat în **GitHub Actions** care descarcă știrile, le rezumă cu **Gemini** și actualizează cursurile valutare.
 
 ---
 
@@ -10,8 +10,8 @@
 2. [Structura directoarelor](#2-structura-directoarelor)
 3. [Stack tehnologic](#3-stack-tehnologic)
 4. [Arhitectura generală](#4-arhitectura-generală)
-5. [Backend (n8n + PostgreSQL)](#5-backend-n8n--postgresql)
-6. [Contractul API](#6-contractul-api)
+5. [Backend (Firebase + GitHub Actions)](#5-backend-firebase--github-actions)
+6. [Modelul de date Firestore](#6-modelul-de-date-firestore)
 7. [Aplicația Android — straturi](#7-aplicația-android--straturi)
 8. [Ecrane și navigare](#8-ecrane-și-navigare)
 9. [Fluxuri principale](#9-fluxuri-principale)
@@ -32,64 +32,58 @@
 | Limbaj | Kotlin 2.0.21, JVM 17 |
 | UI | Jetpack Compose + Material 3 |
 | Arhitectură | Clean Architecture (data / domain / ui) + MVVM |
-| Backend | n8n (2 workflow-uri) + PostgreSQL |
+| Backend | Firebase (Auth + Cloud Firestore, plan Spark gratuit) + job Node.js în GitHub Actions (la 30 min) |
 | Limba interfeței | Română |
 | Activity-uri | 2 — `AuthActivity` (LAUNCHER) și `MainActivity` |
-| Autentificare | email + parolă (n8n + PostgreSQL, fallback local) și Google (Credential Manager) |
+| Autentificare | Firebase Authentication: email + parolă și Google (Credential Manager) |
 
-**Ideea centrală:** utilizatorul alege câte minute are la dispoziție. Backend-ul selectează, cu un algoritm *greedy*, cele mai recente articole din categoriile preferate a căror durată de citire însumată încape în bugetul de timp. Articolele deja citite sunt excluse.
+**Ideea centrală:** utilizatorul alege câte minute are la dispoziție și categoriile preferate; aplicația afișează cele mai recente articole necitite din acele categorii, cu timpul de lectură estimat din textul complet, plus un rezumat AI (idei cheie, etichete, impact pe cursul valutar și o „aprofundare”) și un widget Market Pulse (EUR/RON, USD/RON, BTC/USD cu grafic istoric).
 
 ---
 
 ## 2. Structura directoarelor
 
 ```
-ProiectAndroid/
+NewsFilter/
 ├── build.gradle.kts              # build top-level (plugin-uri, apply false)
 ├── settings.gradle.kts           # rootProject = "NewsFilter", include(":app")
-├── gradle.properties
-├── local.properties              # sdk.dir + N8N_BASE_URL/N8N_API_KEY/GOOGLE_WEB_CLIENT_ID (local)
-├── local.properties.example      # Șablon pentru local.properties
-├── gradle/
-│   ├── libs.versions.toml        # Version Catalog — toate dependențele
-│   └── wrapper/gradle-wrapper.properties   # Gradle 8.10.2
-├── backend/
-│   ├── postgres_schema.sql                     # schema DB (articles, article_feedback, users) + seed
-│   ├── workflow_1_ingestion_and_processing.json # n8n: RSS → Postgres
-│   └── workflow_2_api_webhooks.json             # n8n: API REST pt. aplicație
+├── local.properties              # sdk.dir (local, ignorat de git)
+├── FIREBASE_SETUP.md             # ghidul de configurare Firebase + GitHub Actions
+├── gradle/libs.versions.toml     # Version Catalog — toate dependențele
+├── firebase/
+│   ├── firestore.rules           # regulile de securitate Firestore
+│   └── firebase.json             # pentru `firebase deploy --only firestore:rules`
+├── sync/                         # jobul de sincronizare (Node.js), rulat de GitHub Actions
+│   ├── index.mjs                 # orchestrare: cursuri → știri → Firestore
+│   └── lib/                      # rss, scrape, gemini, market, util
+├── .github/workflows/firebase-sync.yml   # programare la 30 de minute
+├── backend/legacy-n8n/           # vechiul backend n8n + PostgreSQL (arhivat, nefolosit)
 └── app/
-    ├── build.gradle.kts
-    ├── proguard-rules.pro
-    └── src/main/
-        ├── AndroidManifest.xml
-        ├── res/ (values, xml, drawable, mipmap)
-        └── java/ro/newsfilter/app/
-            ├── AuthActivity.kt          # Activity 1 (LAUNCHER): autentificare
-            ├── MainActivity.kt          # Activity 2: experiența principală
-            ├── NewsFilterApp.kt
-            ├── core/
-            │   ├── auth/        GoogleSignInHelper (Credential Manager)
-            │   ├── di/          NetworkModule, DatabaseModule, RepositoryModule
-            │   ├── network/     ApiKeyInterceptor
-            │   ├── sensor/      ShakeDetector + ShakeToRefreshEffect (accelerometru)
-            │   └── util/        NetworkMonitor, ArticleIntents
-            ├── data/
-            │   ├── local/       AppDatabase, dao/NewsDao, entity/NewsEntity
-            │   ├── remote/      NewsApiService, dto/(NewsDto, CategoriesResponseDto,
-            │   │                FeedbackRequestDto, AuthDtos, Mappers)
-            │   ├── preferences/ UserPreferencesRepository (DataStore: preferințe + sesiune)
-            │   └── repository/  NewsRepositoryImpl, AuthRepositoryImpl
-            ├── domain/
-            │   ├── model/       NewsArticle, Category, User (+ AuthProvider, AuthResult)
-            │   └── repository/  NewsRepository, AuthRepository (interfețe)
-            ├── worker/          DailyNewsNotificationWorker, NotificationScheduler
-            └── ui/
-                ├── NewsFilterAppContent.kt
-                ├── navigation/  Routes, NavGraph, BottomNavBar
-                ├── screens/     auth, onboarding, feed, detail, bookmarks, settings
-                ├── components/  NewsCard, ArticleActionsSheet, CategoryChip, TimeChipSelector,
-                │                OfflineBanner, ErrorView, LoadingShimmer, ScreenHeader
-                └── theme/       Color, Theme, Type
+    ├── build.gradle.kts          # + pluginul google-services
+    ├── google-services.json      # configurația Firebase (local, ignorat de git)
+    └── src/main/java/ro/newsfilter/app/
+        ├── AuthActivity.kt          # Activity 1 (LAUNCHER): autentificare
+        ├── MainActivity.kt          # Activity 2: experiența principală
+        ├── NewsFilterApp.kt
+        ├── core/
+        │   ├── auth/        SessionManager, GoogleSignInHelper (Credential Manager)
+        │   ├── di/          FirebaseModule, DatabaseModule, RepositoryModule
+        │   ├── network/     ApiErrors (mesaje de eroare în română)
+        │   ├── audio/       redarea audio (TTS) a pachetului de știri
+        │   ├── sensor/      ShakeDetector + ShakeToRefreshEffect (accelerometru)
+        │   └── util/        NetworkMonitor, ArticleIntents
+        ├── data/
+        │   ├── local/       AppDatabase, dao/NewsDao, entity/(NewsEntity, EntityMappers)
+        │   ├── remote/      firestore/FirestoreMappers (structura colecțiilor + mapare)
+        │   ├── preferences/ UserPreferencesRepository (DataStore: preferințe + sesiune)
+        │   └── repository/  NewsRepositoryImpl, AuthRepositoryImpl, MarketRepositoryImpl
+        ├── domain/
+        │   ├── model/       NewsArticle, Category, User, MarketPulse (+ cursuri, istoric)
+        │   └── repository/  NewsRepository, AuthRepository, MarketRepository (interfețe)
+        ├── worker/          NewsSyncWorker, DailyNewsNotificationWorker, NotificationScheduler
+        └── ui/              navigation, screens (auth, onboarding, feed, detail, bookmarks,
+                             settings), components (NewsCard, MarketWidgetCard, MarketChart,
+                             CurrencyConverter, …), theme
 ```
 
 ---
@@ -102,190 +96,120 @@ Toate versiunile sunt centralizate în `gradle/libs.versions.toml`.
 |---|---|---|---|
 | Build | Android Gradle Plugin | 8.7.2 | |
 | Build | Gradle | 8.10.2 | |
-| Build | KSP | 2.0.21-1.0.28 | procesare adnotări (Hilt, Room, Moshi) |
+| Build | KSP | 2.0.21-1.0.28 | procesare adnotări (Hilt, Room) |
 | UI | Compose BOM | 2024.10.01 | Compose + Material 3 + icons extended |
 | UI | Navigation Compose | 2.8.4 | navigare între ecrane |
 | UI | Coil | 2.7.0 | încărcare imagini async cu cache |
 | UI | AndroidX Browser | 1.8.0 | Chrome Custom Tabs pt. articolul sursă |
 | DI | Hilt | 2.52 | injecție de dependențe (+ hilt-work, hilt-navigation-compose) |
-| Rețea | Retrofit | 2.11.0 | client HTTP declarativ |
-| Rețea | OkHttp logging | 4.12.0 | logare cereri (doar debug) |
-| Rețea | Moshi | 1.15.1 | JSON (codegen KSP, fără reflecție) |
+| Cloud | Firebase BoM | 34.0.0 | `firebase-auth` (autentificare), `firebase-firestore` (baza de date cloud) |
+| Cloud | kotlinx-coroutines-play-services | 1.9.0 | `await()` pe Task-urile Firebase |
 | Persistență | Room | 2.6.1 | cache offline + favorite + citite |
 | Persistență | DataStore Preferences | 1.1.1 | preferințele utilizatorului |
-| Background | WorkManager | 2.10.0 | notificarea zilnică |
+| Background | WorkManager | 2.10.0 | sincronizare periodică + notificarea zilnică |
 | Async | Coroutines | 1.9.0 | Flow / suspend |
-| Autentificare | Credential Manager (`androidx.credentials`) | 1.3.0 | „Continuă cu Google” |
+| Autentificare | Credential Manager (`androidx.credentials`) | 1.5.0 | „Continuă cu Google” |
 | Autentificare | Google ID (`googleid`) | 1.1.1 | `GetSignInWithGoogleOption`, `GoogleIdTokenCredential` |
+| Job sincronizare | Node.js 24 + `firebase-admin`, `fast-xml-parser` | — | RSS, scraping, Gemini, cursuri → Firestore |
 
 ---
 
 ## 4. Arhitectura generală
 
 ```
- ┌────────────────────┐   la 30 min    ┌──────────────────────────┐
- │  RSS BBC Tech      │ ─────────────▶ │ n8n Workflow 1           │
- │  RSS BBC Business  │                │ Ingestie & normalizare   │
- └────────────────────┘                └────────────┬─────────────┘
-                                                    │ INSERT / UPSERT
-                                                    ▼
-                                       ┌──────────────────────────┐
-                                       │ PostgreSQL               │
-                                       │ articles, feedback, users│
-                                       └────────────┬─────────────┘
-                                                    │ SELECT / INSERT
-                                                    ▼
-                                       ┌──────────────────────────┐
-                                       │ n8n Workflow 2 (API)     │
-                                       │ GET /news  GET /categories│
-                                       │ POST /feedback /auth/login│
-                                       │ POST /users               │
-                                       └────────────┬─────────────┘
-                                                    │ HTTPS + X-API-Key
-                                                    ▼
+ ┌───────────────────────────────────────┐
+ │ GitHub Actions — la 30 min (gratuit)  │   RSS BBC (6 feed-uri) → scraping → Gemini
+ │ sync/index.mjs  (firebase-admin)      │   Frankfurter (BCE) + CoinGecko
+ └───────────────────┬───────────────────┘
+                     │ scrie (Admin SDK, ocolește regulile)
+                     ▼
+ ┌───────────────────────────────────────┐   Firebase Authentication
+ │ Cloud Firestore (plan Spark, 0 €)     │   (email + parolă, Google)
+ │ articles · market · market_history    │            │
+ │ users/{uid}/(bookmarks, votes)        │            │ request.auth.uid
+ └───────────────────┬───────────────────┘            │
+                     │ citiri incrementale, listener în timp real, scrieri personale
+                     ▼                                ▼
  ┌───────────────────────────────────────────────────────────────────┐
  │ Aplicația Android                                                 │
- │  UI (Compose) → ViewModel → NewsRepository → Retrofit / Room      │
- │                                      DataStore (preferințe)       │
- │                                      WorkManager (notificare)     │
+ │  UI (Compose) → ViewModel → Repository → Firestore / Room         │
+ │                                 DataStore (preferințe + sesiune)  │
+ │                                 WorkManager (sincronizare, notif.)│
  └───────────────────────────────────────────────────────────────────┘
 ```
 
+Nu există server propriu: partea „de server” (descărcare, procesare AI, cursuri) rulează în jobul
+programat, iar aplicația citește direct din Firestore, protejată de regulile de securitate.
+
 Pe dispozitiv, arhitectura respectă Clean Architecture:
 
-- **domain** — modele pure (`NewsArticle`, `Category`, `User`) și contractele `NewsRepository` / `AuthRepository`; fără dependențe de framework.
-- **data** — implementarea repository-ului, Retrofit (remote), Room (local), DataStore (preferințe), mapperi DTO ↔ Domain ↔ Entity.
+- **domain** — modele pure (`NewsArticle`, `Category`, `User`, `MarketPulse`…) și contractele `NewsRepository` / `AuthRepository` / `MarketRepository`; fără dependențe de framework.
+- **data** — implementările repository-urilor, Firestore (remote), Room (local, sursa unică de adevăr pentru UI), DataStore (preferințe), mapperi Firestore ↔ Domain ↔ Entity.
 - **ui** — ecrane Compose + ViewModel-uri Hilt care expun `StateFlow<UiState>`.
-- **core** — module Hilt, interceptor, utilitare.
+- **core** — module Hilt (`FirebaseModule`…), sesiune, erori, senzori, utilitare.
 
 ---
 
-## 5. Backend (n8n + PostgreSQL)
+## 5. Backend (Firebase + GitHub Actions)
 
-### 5.1 Schema PostgreSQL — `backend/postgres_schema.sql`
+Totul rulează pe planuri gratuite: Firebase **Spark** (Auth nelimitat; Firestore 50.000 citiri și
+20.000 scrieri pe zi, 1 GiB stocare) și **GitHub Actions** (nelimitat pe repository public).
+Configurarea pas cu pas: [`FIREBASE_SETUP.md`](FIREBASE_SETUP.md).
 
-**Tabela `articles`**
+### 5.1 Jobul de sincronizare — `sync/` (`.github/workflows/firebase-sync.yml`)
 
-| Coloană | Tip | Note |
+Rulează la fiecare 30 de minute (și manual, *Run workflow*), cu secretele `FIREBASE_SERVICE_ACCOUNT`
+și `GEMINI_API_KEY`:
+
+1. **Cursuri valutare** (`lib/market.mjs`): EUR/RON și USD/RON de la BCE (Frankfurter), BTC/USD de la
+   CoinGecko → `market/pulse`; adaugă un punct în `market_history/{PERECHE}_intraday` (la 30 min,
+   păstrat 30 de zile); o dată pe zi actualizează `{PERECHE}_daily` (BCE 5 ani, BTC 365 de zile).
+2. **Știri** (`lib/rss.mjs`): 6 feed-uri BBC (tech, economy, sport, science, health, world);
+   **categoria = feed-ul**; deduplicare după URL.
+3. **Text complet** (`lib/scrape.mjs`): paragrafele articolului (max. 15.000 caractere);
+   **timpul de citire** = `max(1, round(cuvinte / 200))`, calculat pe textul complet.
+4. **Smart Digest cu Gemini** (`lib/gemini.mjs`, `gemini-flash-lite-latest`): 5 articole per cerere,
+   max. 30 per rulare (cota gratuită). Răspuns JSON validat: rezumat, 2-3 idei cheie, etichete,
+   `affected_currency` (doar EUR/RON, USD/RON, BTC/USD), `market_sentiment` (UP / DOWN / NEUTRAL),
+   `market_impact_note` și `deep_dive` („Context / De ce contează / Ce urmează”). Articolele la care
+   AI-ul eșuează rămân cu rezumatul RSS și sunt reîncercate (max. 3 încercări).
+5. **Scriere** în `articles/{id}` (ID = primele 20 de caractere din SHA-1(URL)) cu `updatedAt` =
+   timestamp de server; articolele mai vechi de 14 zile sunt șterse.
+
+Pentru a rămâne în cotă, jobul nu interoghează colecția `articles`: un index compact (`meta/index`)
+reține ID-ul, data publicării și starea AI a fiecărui articol → o rulare costă ~10 citiri.
+
+### 5.2 Autentificare — Firebase Authentication
+
+Email + parolă (parola este gestionată exclusiv de Firebase) și Google (token-ul ID obținut prin
+Credential Manager este verificat de Firebase). Profilul este oglindit în `users/{uid}`.
+
+### 5.3 Regulile de securitate — `firebase/firestore.rules`
+
+| Colecție | Citire | Scriere |
 |---|---|---|
-| `id` | UUID PK | `gen_random_uuid()` (extensia `pgcrypto`) |
-| `title` | VARCHAR(500) | NOT NULL |
-| `source` | VARCHAR(100) | NOT NULL |
-| `image_url` | TEXT | opțional |
-| `summary` | TEXT | NOT NULL |
-| `article_url` | TEXT | NOT NULL, **UNIQUE** (cheia de deduplicare) |
-| `read_time_minutes` | INT | implicit 2 |
-| `category` | VARCHAR(50) | slug (`tech`, `sport`, …) |
-| `published_at` | TIMESTAMPTZ | implicit `NOW()` |
-| `created_at` | TIMESTAMPTZ | implicit `NOW()` |
+| `articles`, `market`, `market_history` | orice utilizator autentificat | nimeni (doar jobul, prin Admin SDK) |
+| `users/{uid}/**` | doar proprietarul (`request.auth.uid == uid`) | doar proprietarul |
+| orice altceva (ex. `meta`) | nimeni | nimeni |
 
-Indecși: `category`, `published_at DESC`, `read_time_minutes`.
+---
 
-**Tabela `article_feedback`**
+## 6. Modelul de date Firestore
 
-| Coloană | Tip | Note |
-|---|---|---|
-| `id` | SERIAL PK | |
-| `article_id` | UUID FK → `articles(id)` | `ON DELETE CASCADE` |
-| `is_positive` | BOOLEAN | like / dislike |
-| `created_at` | TIMESTAMPTZ | |
-
-**Tabela `users`** (autentificare din aplicație)
-
-| Coloană | Tip | Note |
-|---|---|---|
-| `id` | UUID PK | `gen_random_uuid()` |
-| `email` | VARCHAR(255) | NOT NULL, **UNIQUE**, salvat cu litere mici |
-| `name` | VARCHAR(120) | numele afișat |
-| `password_hash` | TEXT | bcrypt (`crypt(parola, gen_salt('bf'))`); NULL pentru conturile Google |
-| `auth_provider` | VARCHAR(20) | `email` sau `google` (CHECK) |
-| `created_at` / `last_login_at` | TIMESTAMPTZ | |
-
-**Date seed:** 5 articole demo în română (tech, sport, economy, science, local), cu `ON CONFLICT DO NOTHING`.
-
-### 5.2 Workflow 1 — *Ingestion & Processing*
-
-```
-Schedule Trigger (30 min) ─┬─▶ RSS BBC Technology ─┐
-                           └─▶ RSS BBC Business  ──┴─▶ Code: Normalizare & Calcul Timp ─▶ Postgres INSERT
-```
-
-Nodul **Normalizare & Calcul Timp** (JavaScript):
-- ignoră item-urile fără titlu sau link;
-- **timp de citire** = `max(1, round(nr_cuvinte / 200))` (~200 cuvinte/minut, calculat pe snippet);
-- imaginea vine din `enclosure.url` sau `media:thumbnail`, altfel o imagine Unsplash implicită;
-- **categoria**: `economy` dacă link-ul conține „business”, altfel `tech`;
-- elimină tag-urile HTML din rezumat; `source` = „BBC News”.
-
-Inserarea face **UPSERT** pe `article_url` (actualizează `summary` și `read_time_minutes`).
-
-### 5.3 Workflow 2 — *API Webhooks*
-
-| Endpoint | Pași |
+| Document | Câmpuri |
 |---|---|
-| `GET /news` | Webhook → IF verificare `X-API-Key` → SELECT ultimele 50 articole → Code „Pachet de Timp (Greedy)” → răspuns JSON array |
-| `GET /categories` | Webhook → răspuns static cu 9 categorii |
-| `POST /feedback` | Webhook → INSERT în `article_feedback` → `{ "status": "ok" }` |
-| `POST /auth/login` | Webhook → IF `X-API-Key` (altfel 403) → `UPDATE users … WHERE password_hash = crypt($2, password_hash) RETURNING …` → Code: 200 + profil / 401 |
-| `POST /users` | Webhook → IF `X-API-Key` (altfel 403) → `INSERT … ON CONFLICT (email) DO UPDATE … WHERE provider = google RETURNING …` → Code: 200 + profil / 409 |
+| `articles/{id}` | `title`, `source`, `imageUrl`, `summary`, `articleUrl`, `readTimeMinutes`, `category` (slug din `Category`), `publishedAt` (ISO 8601), `fullContent`, `aiSummary`, `aiBullets[]`, `aiTags[]`, `deepDive`, `affectedCurrency`, `marketSentiment`, `marketImpactNote`, `aiProcessed`, `updatedAt` (timestamp) |
+| `market/pulse` | `rates.{EUR_RON, USD_RON, BTC_USD}` = `{pair, rate, changePercent, source, updatedAt}` |
+| `market_history/{PERECHE}_intraday` | `points: [{t: ms, v: curs}]` — la 30 min, ultimele 30 de zile (graficele 1 Z / 5 Z / 1 L) |
+| `market_history/{PERECHE}_daily` | `points: [{t, v}]` — zilnic, max. 5 ani (graficele 1 A / Max) |
+| `users/{uid}` | `name`, `email`, `authProvider`, `createdAt`, `lastLoginAt` |
+| `users/{uid}/bookmarks/{articleId}` | copia articolului + `createdAt` (favoritul rămâne chiar dacă știrea e ștearsă de pe server) |
+| `users/{uid}/votes/{articleId}` | `positive` (like / dislike), `votedAt` |
 
-**Algoritmul greedy (`GET /news`):**
-1. citește `maxMinutes` (implicit 5), `categories` (CSV) și `exclude` (CSV de ID-uri);
-2. filtrează după categorie și exclude articolele citite;
-3. *fallback*: dacă nu rămâne nimic, ia toate articolele necitite indiferent de categorie;
-4. parcurge articolele (ordonate după `published_at DESC`) și le adaugă cât timp `read_time ≤ timp_rămas`;
-5. dacă pachetul e gol, returnează măcar primul articol.
-
----
-
-## 6. Contractul API
-
-Baza URL vine din `BuildConfig.N8N_BASE_URL`. Toate cererile primesc automat headerele `X-API-Key` și `Accept: application/json` (prin `ApiKeyInterceptor`).
-
-### `GET /news?categories=tech,sport&maxMinutes=5&exclude=id1,id2`
-
-```json
-[
-  {
-    "id": "uuid",
-    "title": "…",
-    "source": "BBC News",
-    "image_url": "https://…",
-    "summary": "…",
-    "article_url": "https://…",
-    "read_time_minutes": 2,
-    "category": "tech",
-    "published_at": "2026-11-17T08:00:00Z"
-  }
-]
-```
-
-### `GET /categories`
-
-```json
-{ "categories": ["tech","sport","economy","politics","science","local","health","entertainment","world"] }
-```
-
-### `POST /feedback`
-
-```json
-{ "article_id": "uuid", "is_positive": true }
-```
-
-### `POST /auth/login`
-
-```json
-{ "email": "ana@exemplu.ro", "password": "parola123" }
-```
-`200` → `{ "id": "uuid", "email": "…", "name": "Ana", "auth_provider": "email" }` · `401` credențiale greșite · `403` cheie API invalidă.
-
-### `POST /users`
-
-```json
-{ "email": "ana@exemplu.ro", "name": "Ana Popescu", "password": "parola123", "auth_provider": "email" }
-```
-Pentru Google: `"password": ""`, `"auth_provider": "google"` (profilul se creează sau se actualizează).
-`200` → profilul · `409` există deja un cont cu acest email.
+**Cum citește aplicația (consum redus de citiri):**
+- **Feed:** sincronizare *incrementală* — `articles where updatedAt > ultima_sincronizare orderBy updatedAt` (pagini de 200; prima dată ultimele 200). Filtrarea după categorii și timp se face local, în Room.
+- **Cursuri:** listener în timp real pe `market/pulse`, activ doar cât Feed-ul e vizibil (o citire doar când jobul schimbă cursurile).
+- **Grafic:** un singur document per pereche/rezoluție, ținut în memorie 30 de minute; seria pentru fiecare interval e agregată local pe „găleți” (10 min / 30 min / 4 h / 1 zi / 7 zile). Știrile cu impact (bannerul și punctele de pe grafic) vin din cache-ul Room.
 
 ---
 
@@ -301,12 +225,13 @@ Pentru Google: `"password": ""`, `"auth_provider": "google"` (profilul se creeaz
 
 | Fișier | Rol |
 |---|---|
-| `di/NetworkModule` | Moshi, OkHttp (timeout 30 s, interceptor cheie, logging BODY doar în debug), Retrofit, `NewsApiService` |
-| `di/DatabaseModule` | Room `newsfilter_db` cu `fallbackToDestructiveMigration()`, `NewsDao` |
-| `di/RepositoryModule` | `@Binds NewsRepositoryImpl → NewsRepository`, `AuthRepositoryImpl → AuthRepository` |
-| `auth/GoogleSignInHelper` | „Sign in with Google” prin Credential Manager; întoarce `Success` / `Cancelled` / `Unavailable` (fără excepții) |
+| `di/FirebaseModule` | `FirebaseAuth` și `FirebaseFirestore` (cache doar în memorie — cache-ul persistent este Room) |
+| `di/DatabaseModule` | Room `newsfilter_db` cu migrări explicite, `NewsDao` |
+| `di/RepositoryModule` | `@Binds` pentru `NewsRepository`, `AuthRepository`, `MarketRepository` |
+| `auth/SessionManager` | oglindește starea Firebase Auth în DataStore; la deconectare (sau dacă Firebase pierde utilizatorul) șterge sesiunea și cache-ul Room |
+| `auth/GoogleSignInHelper` | „Sign in with Google” prin Credential Manager; întoarce `Success(idToken)` / `Cancelled` / `Error(mesaj)` |
+| `network/ApiErrors` | `Throwable.toUserMessage()`: erori Firestore / rețea → mesaje în română; `UserFacingException` |
 | `sensor/ShakeDetector` | accelerometru: forța g > 2,2 de 2 ori în 600 ms → scuturare; cooldown 2 s (debouncing); `ShakeToRefreshEffect` îl leagă de ciclul de viață (activ doar în RESUMED) |
-| `network/ApiKeyInterceptor` | adaugă `X-API-Key` din `BuildConfig` |
 | `util/NetworkMonitor` | `Flow<Boolean>` de conectivitate (`callbackFlow` + `NetworkCallback`, cerință INTERNET + VALIDATED) |
 
 ### 7.3 `domain`
@@ -314,11 +239,12 @@ Pentru Google: `"password": ""`, `"auth_provider": "google"` (profilul se creeaz
 - **`NewsArticle`** — model pur cu `isRead`, `isBookmarked` și proprietăți derivate `categoryLabel`, `categoryEmoji`.
 - **`Category`** (enum) — 9 categorii cu slug, etichetă în română și emoji:
   `tech 💻, sport ⚽, economy 📈, politics 🏛️, science 🔬, local 📍, health 🏥, entertainment 🎬, world 🌍`.
-- **`NewsRepository`** — contract: `getFilteredNews`, `getCategories`, `sendFeedback`, `markAsRead`, `toggleBookmark`, `getBookmarkedArticles`, `getReadArticleIds`, `getArticleById`, `clearOldCache`.
+- **`NewsRepository`** — contract offline-first: `observeFeed` (Flow din Room), `syncFeed`, `syncBookmarks`, `requestDeepDive`, `sendFeedback`, `setUserVote`, `markAsRead`, `resetReadHistory`, `setBookmarked`, `getBookmarkedArticles`, `getArticleById`, `clearOldCache`.
+- **`MarketRepository`** — `observeMarketPulse` (Flow în timp real), `fetchMarketHistory`, `cachedMarketHistory`.
 
 ### 7.4 `data`
 
-**Room — tabela `news` (`NewsEntity`)**: aceleași câmpuri ca API-ul + flag-uri locale `is_read`, `is_bookmarked` și `cached_at`. O singură tabelă servește drept cache, favorite și istoric de citire.
+**Room — tabela `news` (`NewsEntity`)**: aceleași câmpuri ca documentele `articles` + flag-uri locale `is_read`, `is_bookmarked`, `user_vote` și `cached_at`. O singură tabelă servește drept cache, favorite și istoric de citire.
 
 **`NewsDao`**: `insertAll` / `insert` (REPLACE), `getNewsByCategories` (Flow), `getBookmarkedArticles` (Flow), `getArticleById`, `markAsRead`, `toggleBookmark` (`NOT is_bookmarked`), `getReadArticleIds`, `clearOldCache` (păstrează favoritele), `clearAllNonBookmarked`.
 
@@ -333,21 +259,23 @@ Pentru Google: `"password": ""`, `"auth_provider": "google"` (profilul se creeaz
 | `daily_notification_enabled` | false |
 | `notification_hour` / `notification_minute` | 08:00 |
 | `shake_to_refresh` | true |
-| `is_logged_in`, `user_email`, `user_name`, `auth_provider` | sesiunea curentă |
-| `local_account_<email>` | hash SHA-256 al parolei + nume (fallback offline) |
+| `is_logged_in`, `firebase_uid`, `user_email`, `user_name`, `auth_provider` | oglinda sesiunii Firebase |
+| `last_feed_sync_us` | cursorul sincronizării incrementale (cel mai nou `updatedAt`, µs) |
 
-**`AuthRepositoryImpl`** — *cloud first, local fallback*: cererea merge la n8n (timeout 8 s). Răspunsurile 401 / 409 ale serverului sunt decisive; dacă serverul nu răspunde (offline, 404, 5xx, timeout), se folosește contul local din DataStore, astfel încât autentificarea merge și fără backend. La succes scrie sesiunea în DataStore.
+**`AuthRepositoryImpl`** — Firebase Authentication, fără mod offline: `signInWithEmailAndPassword`, `createUserWithEmailAndPassword` (+ numele afișat) și `signInWithCredential(GoogleAuthProvider)`. Erorile Firebase devin mesaje în română (parolă greșită, email folosit, prea multe încercări, fără rețea). La succes scrie profilul în `users/{uid}` (best effort) și sesiunea în DataStore.
 
-**`NewsRepositoryImpl`** — strategie *network-first cu fallback pe cache*:
-1. apelează `GET /news`;
-2. pentru fiecare articol primit păstrează flag-urile locale existente (`isRead`, `isBookmarked`) și îl salvează în Room;
-3. la eroare de rețea citește din Room, filtrează și reconstruiește local pachetul cu același algoritm greedy (`buildTimePack`);
-4. `sendFeedback` și `getCategories` înghit excepțiile.
+**`NewsRepositoryImpl`** — *offline-first*:
+1. UI-ul observă doar Room; `syncFeed` aduce din Firestore articolele noi / actualizate (incremental) și le salvează păstrând starea locală (`isRead`, `userVote`, `deepDive`, favorit);
+2. favoritele: `users/{uid}/bookmarks` (scriere la salvare, citire la autentificare); voturile: `users/{uid}/votes`;
+3. „Aprofundează” citește analiza pre-generată (Room, apoi `articles/{id}`).
 
-**Mappers** (`dto/Mappers.kt`): `NewsDto → NewsArticle → NewsEntity` și `NewsEntity → NewsArticle`.
+**`MarketRepositoryImpl`** — listener pe `market/pulse` combinat cu ultima știre cu impact din Room; istoricul din `market_history`, agregat local.
+
+**Mappers**: `data/remote/firestore/FirestoreMappers.kt` (document Firestore → `NewsArticle`, favorit, cursuri, puncte) și `data/local/entity/EntityMappers.kt` (`NewsArticle` ↔ `NewsEntity`).
 
 ### 7.5 `worker`
 
+- **`NewsSyncWorker`** / `NewsSyncScheduler` — sincronizare periodică din Firestore la 3 ore (doar cu rețea și sesiune activă).
 - **`NotificationScheduler`** — programează un `PeriodicWorkRequest` la 24 h, cu întârziere inițială calculată până la ora aleasă (unic, politica `UPDATE`); are și metodă de anulare.
 - **`DailyNewsNotificationWorker`** (`@HiltWorker`) — citește preferințele, cere pachetul de știri (categorii implicite `tech, economy, sport` dacă nu sunt alese) și afișează o notificare `BigTextStyle` cu primele 3 titluri; la eroare → `Result.retry()`.
 
@@ -362,10 +290,10 @@ Bara de jos (`BottomNavBar`) apare doar pe **Pentru tine / Salvate / Setări**. 
 |---|---|---|
 | **Onboarding** | `OnboardingViewModel` | selecție multiplă de categorii (minim una) + timp implicit 2/5/15 min; salvează în DataStore |
 | **Feed – „Pentru tine”** | `FeedViewModel` | salut personalizat, meniu „⋮” (reîmprospătare, resetare istoric, deconectare), selector de timp, sumar, listă de carduri cu tap (detaliu) + apăsare lungă (meniu contextual), pull-to-refresh, scuturare |
-| **Detaliu** | `DetailViewModel` | citește articolul din Room, îl marchează automat ca citit; imagine, rezumat, buton „deschide articolul” (Custom Tab), like/dislike → `POST /feedback`, bookmark |
+| **Detaliu** | `DetailViewModel` | citește articolul din Room, îl marchează automat ca citit; imagine, rezumat, buton „deschide articolul” (Custom Tab), like/dislike → `users/{uid}/votes`, bookmark, idei cheie AI, „Aprofundează subiectul” |
 | **Salvate** | `BookmarksViewModel` | listă reactivă din Room a favoritelor; eliminare bookmark |
 | **Setări** | `SettingsViewModel` | cont (nume, email, metodă) + Deconectare cu confirmare, temă întunecată, timp implicit, categorii, „Scutură pentru știri noi”, notificare zilnică + `TimePickerDialog` |
-| **Autentificare** (`AuthActivity`) | `AuthViewModel` | comutator Autentificare / Cont nou, validare în timp real, afișare/ascundere parolă, „Continuă cu Google” + selector demonstrativ |
+| **Autentificare** (`AuthActivity`) | `AuthViewModel` | comutator Autentificare / Cont nou, validare în timp real, afișare/ascundere parolă, „Continuă cu Google” (Credential Manager → Firebase) |
 
 **Componente reutilizabile:** `HeroNewsCard` / `CompactNewsCard` (tap + apăsare lungă), `ArticleActionsSheet` (meniu contextual), `CategoryChip` (+ `getCategoryColor`), `TimeChipSelector` (2/5/15), `OfflineBanner`, `ErrorView`, `LoadingShimmer`.
 
@@ -376,16 +304,16 @@ Bara de jos (`BottomNavBar`) apare doar pe **Pentru tine / Salvate / Setări**. 
 ## 9. Fluxuri principale
 
 **Autentificarea**
-`AuthActivity` → sesiune existentă? → da: `MainActivity`. Nu: formular → validare → `AuthRepository` → n8n (`/auth/login` sau `/users`) sau fallback local → sesiune în DataStore → Toast „Bine ai venit, …!” → `MainActivity` + `finish()`.
+`AuthActivity` → sesiune existentă? → da: `MainActivity`. Nu: formular → validare → `AuthRepository` → Firebase Authentication (email/parolă sau Google) → profil în `users/{uid}` + sesiune în DataStore → Toast „Bine ai venit, …!” → `MainActivity` + `finish()`.
 
 **Deconectarea**
-Meniul „⋮” din Feed sau Setări → `AuthRepository.logout()` șterge sesiunea → `MainActivity` observă `isLoggedIn = false` → `AuthActivity` (task curățat).
+Meniul „⋮” din Feed sau Setări → `AuthRepository.logout()` → `signOut()` Firebase + ștergerea sesiunii și a cache-ului Room → `MainActivity` observă `isLoggedIn = false` → `AuthActivity` (task curățat).
 
 **Prima pornire**
 Onboarding → alegere categorii + minute → salvare DataStore → navigare la Feed (Onboarding scos din back stack).
 
 **Încărcarea feed-ului**
-`FeedViewModel` citește preferințele → ia ID-urile citite din Room → `GET /news` cu categorii, minute, exclude → salvează în Room → afișează. Fără rețea → pachet construit din cache.
+`FeedViewModel` afișează imediat articolele necitite din Room → `syncFeed()` aduce din Firestore doar documentele noi → Room emite lista actualizată. Fără rețea → se afișează cache-ul + banner offline.
 
 **Citirea unui articol**
 Tap pe card → `detail/{id}` → articolul vine din Room → marcat ca citit → nu mai apare la următoarea încărcare a feed-ului.
@@ -397,33 +325,16 @@ Setări → switch activ → (permisiune) → `NotificationScheduler` → la ora
 
 ## 10. Configurare și rulare
 
-### Backend
+Ghidul complet (în română): [`FIREBASE_SETUP.md`](FIREBASE_SETUP.md). Pe scurt:
 
-1. `cp backend/.env.example backend/.env` și completează `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`, `N8N_API_KEY` (fișierul `.env` nu se versionează).
-2. `cd backend && docker compose up -d` — pornește PostgreSQL (schema `postgres_schema.sql` se aplică automat la prima pornire) și n8n.
-3. Importă cele două fișiere JSON în n8n și configurează credențialele Postgres pe nodurile de bază de date (aceleași valori ca în `.env`).
-4. Nodul **Verificare X-API-Key** compară header-ul cu `{{ $env.N8N_API_KEY }}`, deci cheia vine din `backend/.env`.
-5. Activează ambele workflow-uri.
+1. Proiect Firebase (Spark) → aplicație Android `ro.newsfilter.app` + SHA-1 (`./gradlew signingReport`) → `google-services.json` în `app/` (ignorat de git).
+2. Authentication: activează **Email/Password** și **Google**, apoi descarcă din nou `google-services.json`.
+3. Firestore: creează baza de date și publică regulile din `firebase/firestore.rules`.
+4. GitHub: secretele `FIREBASE_SERVICE_ACCOUNT` (cheia contului de serviciu, JSON) și `GEMINI_API_KEY` → tab-ul Actions → **firebase-sync** → *Run workflow*.
+5. `./gradlew :app:assembleDebug` și rulează aplicația — funcționează pe orice rețea, fără `localhost`.
 
-### Aplicația
-
-Secretele nu mai sunt în cod. `app/build.gradle.kts` citește din `local.properties` (rădăcina proiectului, ignorat de git) și le injectează în `BuildConfig`. Copiază `local.properties.example` → `local.properties`:
-
-| Cheie | Rol | Dacă lipsește |
-|---|---|---|
-| `N8N_BASE_URL` | URL-ul webhook-urilor n8n (terminat cu `/`) | `http://10.0.2.2:5678/webhook/` (n8n local din emulator) |
-| `N8N_API_KEY` | Valoarea header-ului `X-API-Key` | șir gol (cererile vor fi respinse) |
-| `GOOGLE_WEB_CLIENT_ID` | Client ID OAuth de tip *Web application* pentru „Continuă cu Google” | selector demonstrativ de conturi |
-
-**Configurare Google Sign-In (opțional):** în Google Cloud Console creează un client OAuth *Android* (pachet `ro.newsfilter.app` + SHA-1 din `./gradlew signingReport`) și un client *Web application*; ID-ul celui Web merge în `GOOGLE_WEB_CLIENT_ID`. Emulatorul trebuie să fie o imagine „Google Play” cu un cont adăugat. Fără aceste condiții, aplicația nu dă crash: deschide selectorul demonstrativ.
-
-**Tabela `users` pe o bază existentă:** `postgres_schema.sql` rulează automat doar la prima creare a volumului. Pe o bază deja creată, rulează manual blocul `CREATE TABLE IF NOT EXISTS users …` și reimportă `workflow_2_api_webhooks.json`.
-
-`N8N_API_KEY` trebuie să fie identică în `local.properties` și `backend/.env`. După modificare, rulează din nou Gradle sync / build.
-
-`network_security_config.xml` permite HTTP necriptat doar pentru `10.0.2.2`, `localhost` și `127.0.0.1`; restul traficului trebuie să fie HTTPS.
-
-Deschide proiectul în Android Studio și rulează configurația `app` (vezi mai jos nota despre Gradle wrapper).
+Aplicația nu mai are secrete în `local.properties` (doar `sdk.dir`). `network_security_config.xml` permite exclusiv HTTPS.
+Test local al jobului, fără scrieri: `cd sync && npm ci && node index.mjs --dry-run`.
 
 ---
 
@@ -431,20 +342,20 @@ Deschide proiectul în Android Studio și rulează configurația `app` (vezi mai
 
 ### Critice (împiedică funcționarea corectă)
 
-1. **Parametrii SQL nu sunt legați în n8n.** Nodurile *PostgreSQL Insert* (workflow 1) și *Insert Feedback* (workflow 2) folosesc `$1 … $8`, dar nu au setată opțiunea `Query Parameters` / `queryReplacement`. Inserările vor eșua. Trebuie adăugate valorile (ex. `{{$json.title}}, {{$json.source}}, …` și `{{$json.body.article_id}}, {{$json.body.is_positive}}`).
-2. **(Parțial)** Endpoint-urile noi `/auth/login` și `/users` răspund cu 403 la cheie greșită; la `/news`, **ramura „false” a verificării cheii API nu e conectată.** O cerere cu cheie greșită nu primește niciun răspuns (rămâne agățată până la timeout). Adăugați un nod *Respond to Webhook* cu 401.
+1. ~~**Parametrii SQL nu sunt legați în n8n.** Nodurile *PostgreSQL Insert* (workflow 1) și *Insert Feedback* (workflow 2) folosesc `$1 … $8`, dar nu au setată opțiunea `Query Parameters` / `queryReplacement`. Inserările vor eșua. Trebuie adăugate valorile (ex. `{{$json.title}}, {{$json.source}}, …` și `{{$json.body.article_id}}, {{$json.body.is_positive}}`).~~ *(Nu mai este aplicabil: backend-ul n8n a fost înlocuit de Firebase.)*
+2. ~~**(Parțial)** Endpoint-urile noi `/auth/login` și `/users` răspund cu 403 la cheie greșită; la `/news`, **ramura „false” a verificării cheii API nu e conectată.** O cerere cu cheie greșită nu primește niciun răspuns (rămâne agățată până la timeout). Adăugați un nod *Respond to Webhook* cu 401.~~ *(Nu mai este aplicabil: backend-ul n8n a fost înlocuit de Firebase.)*
 3. ✅ **Rezolvat.** ~~**Fallback-ul offline poate bloca feed-ul.** În `NewsRepositoryImpl.getFilteredNews`, `newsDao.getNewsByCategories(...).collect { … return@collect }` colectează un Flow Room care nu se termină niciodată (`return@collect` doar iese din lambda). Dacă cache-ul e gol, `throw e` nu se atinge și UI-ul rămâne în loading; în plus, `emit` din interiorul `catch` încalcă principiul de *exception transparency* al Flow-urilor. Soluție: `.first()` în loc de `collect`.~~
 4. ✅ **Rezolvat.** ~~**Lipsește Gradle wrapper-ul** (`gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`) — proiectul nu se poate construi din linie de comandă până nu se regenerează (`gradle wrapper --gradle-version 8.10.2`).~~
 
 ### Importante
 
-5. ✅ **Parțial rezolvat.** ~~**Cheia API e în cod**~~ — acum vine din `local.properties` / `backend/.env`. Atenție: cheia din `BuildConfig` ajunge totuși în APK și poate fi extrasă; e potrivită pentru demo, nu pentru producție.
-6. **`/categories` și `/feedback` nu verifică `X-API-Key`.**
+5. ✅ **Rezolvat.** Nu mai există cheie API în aplicație: accesul la Firestore este controlat de Firebase Auth + regulile de securitate. (Istoric: cheia n8n din `BuildConfig` putea fi extrasă din APK.)
+6. ~~**`/categories` și `/feedback` nu verifică `X-API-Key`.**~~ *(Nu mai este aplicabil: backend-ul n8n a fost înlocuit de Firebase.)*
 7. ✅ **Rezolvat.** ~~**Flash de Onboarding la pornire:** `SettingsViewModel.preferences` pornește cu `UserPreferences()` (`onboardingCompleted = false`), deci `startDestination` e inițial Onboarding chiar și pentru utilizatorii existenți. Afișați un splash/loading până la prima valoare reală din DataStore.~~
 8. ✅ **Rezolvat.** ~~**Feed-ul nu reacționează la schimbarea categoriilor din Setări** — preferințele sunt citite o singură dată cu `.first()` în `init`.~~
 9. ✅ **Rezolvat** (`TimePickerDialog` în Setări + sincronizare cu permisiunea). ~~**Ora notificării nu poate fi schimbată din UI** (textul spune fix 08:00), deși există `updateNotificationTime`. Notificarea nu se reprogramează după reinstalare/repornire decât prin WorkManager (OK), dar switch-ul poate rămâne activ dacă permisiunea e revocată ulterior.~~
-10. **Ingestia acoperă doar 2 surse (BBC Tech/Business, în engleză)** și doar categoriile `tech`/`economy`; celelalte 7 categorii din aplicație vor fi goale (în afara datelor seed), iar fallback-ul greedy va returna articole din alte categorii.
-11. **Comentariile spun că rezumatul e „generat de AI”**, dar în realitate este snippet-ul RSS curățat de HTML; timpul de citire este calculat tot pe snippet, deci aproape mereu 1 minut.
+10. ✅ **Parțial rezolvat.** Ingestia acoperă 6 feed-uri BBC (tech, economy, sport, science, health, world), categoria fiind dată de feed. Categoriile `politics`, `local`, `entertainment` nu au încă o sursă.
+11. ✅ **Rezolvat.** Rezumatul, ideile cheie și aprofundarea sunt generate de Gemini, iar timpul de citire se calculează pe textul complet al articolului.
 12. **Nu există teste** (nici unit, nici instrumented), deși `testInstrumentationRunner` e configurat și dependențele de test lipsesc.
 
 ### Minore
@@ -457,8 +368,8 @@ Deschide proiectul în Android Studio și rulează configurația `app` (vezi mai
 18. `isMinifyEnabled = false` în release; regulile ProGuard sunt minimale.
 19. ✅ **Rezolvat** (`.gitignore` și `README.md` adăugate). ~~Lipsesc `README.md` și `.gitignore` (proiectul nu este sub git; `local.properties`, `.gradle`, `.idea`, `.kotlin` ar trebui ignorate).~~
 20. Iconița notificării este `android.R.drawable.ic_dialog_info` — ar trebui o iconiță proprie, monocromă.
-21. **Token-ul Google nu este verificat pe server.** n8n primește doar email-ul și numele; în producție, `idToken`-ul ar trebui validat (ex. endpoint-ul `tokeninfo` sau o bibliotecă JWT) înainte de a crea sesiunea.
-22. **Fallback-ul offline acceptă un cont necunoscut** când serverul nu răspunde (decizie deliberată pentru demonstrații). Pentru producție: refuzați autentificarea fără server dacă nu există cont local.
+21. ~~**Token-ul Google nu este verificat pe server.** n8n primește doar email-ul și numele; în producție, `idToken`-ul ar trebui validat (ex. endpoint-ul `tokeninfo` sau o bibliotecă JWT) înainte de a crea sesiunea.~~ *(Nu mai este aplicabil: backend-ul n8n a fost înlocuit de Firebase.)*
+22. ~~**Fallback-ul offline acceptă un cont necunoscut** când serverul nu răspunde (decizie deliberată pentru demonstrații). Pentru producție: refuzați autentificarea fără server dacă nu există cont local.~~ *(Nu mai este aplicabil: backend-ul n8n a fost înlocuit de Firebase.)*
 
 ---
 
@@ -467,21 +378,21 @@ Deschide proiectul în Android Studio și rulează configurația `app` (vezi mai
 | Cerință | Punctaj | Implementare | Unde în cod |
 |---|---|---|---|
 | **≥ 2 Activity-uri** | 10 | `AuthActivity` (LAUNCHER) → `MainActivity`; navigare explicită cu `Intent` + `finish()`, revenire la logout cu `FLAG_ACTIVITY_CLEAR_TASK` | `AuthActivity.kt`, `MainActivity.kt`, `AndroidManifest.xml` |
-| **Autentificare + validarea datelor** | 10 | Login / Cont nou; `Patterns.EMAIL_ADDRESS`, parolă ≥ 6, nume obligatoriu; erori în timp real (`isError` + `supportingText`), buton afișare parolă; sesiune în DataStore; sincronizare cu PostgreSQL (`/auth/login`, `/users`, bcrypt) + fallback local | `ui/screens/auth/*`, `data/repository/AuthRepositoryImpl.kt`, `backend/workflow_2_api_webhooks.json` |
+| **Autentificare + validarea datelor** | 10 | Login / Cont nou; `Patterns.EMAIL_ADDRESS`, parolă ≥ 6, nume obligatoriu; erori în timp real (`isError` + `supportingText`), buton afișare parolă; conturi în Firebase Authentication (parola gestionată de Firebase), profil în Firestore `users/{uid}`, sesiune oglindită în DataStore | `ui/screens/auth/*`, `data/repository/AuthRepositoryImpl.kt`, `core/auth/SessionManager.kt` |
 | **Evenimente multiple: click, long-click, notificări** | 10 | `combinedClickable` pe `HeroNewsCard` și `CompactNewsCard`: tap → detaliu, apăsare lungă → vibrație + `ArticleActionsSheet` (Salvează, Marchează ca citit, Distribuie, Deschide în browser); notificare zilnică WorkManager + `TimePickerDialog` | `ui/components/NewsCard.kt`, `ui/components/ArticleActionsSheet.kt`, `worker/*`, `ui/screens/settings/SettingsScreen.kt` |
 | **Meniu funcțional** | 10 | Meniu „⋮” (`IconButton` + `DropdownMenu`) în antetul Feed: Reîmprospătează pachetul, Resetează istoricul de citire (Room + Snackbar), Deconectare | `ui/screens/feed/FeedScreen.kt` (`FeedOverflowMenu`), `FeedViewModel.resetReadHistory()`, `NewsDao.resetReadHistory()` |
-| **Stocare locală + cloud** | 20 | Room (cache, salvate, istoric citire, vot), DataStore (preferințe, sesiune); PostgreSQL prin API REST n8n (articole, utilizatori, feedback) | `data/local/*`, `data/preferences/*`, `data/remote/*`, `NewsRepositoryImpl.kt`, `backend/*` |
+| **Stocare locală + cloud** | 20 | Room (cache, salvate, istoric citire, vot), DataStore (preferințe, sesiune); **Cloud Firestore** (articole, cursuri + istoric, profil, favorite, voturi) protejat de reguli de securitate | `data/local/*`, `data/preferences/*`, `data/remote/firestore/*`, `NewsRepositoryImpl.kt`, `MarketRepositoryImpl.kt`, `firebase/firestore.rules`, `sync/` |
 | **Cod curat / modularitate** | 20 | Clean Architecture (domain / data / ui / core), MVVM, Hilt, interfețe de repository, KDoc pe clasele-cheie | `AuthActivity`, `AuthViewModel`, `ShakeDetector`, `NewsRepositoryImpl`, `FeedViewModel`, `NotificationScheduler` |
-| **Bonus: autentificare Google** | 5 | Credential Manager + `GetSignInWithGoogleOption`; selector demonstrativ dacă lipsesc Play Services / client ID | `core/auth/GoogleSignInHelper.kt`, `AuthActivity.launchGoogleSignIn()`, `AuthScreen.kt` |
+| **Bonus: autentificare Google** | 5 | Credential Manager + `GetSignInWithGoogleOption` → token ID verificat de Firebase (`GoogleAuthProvider`) | `core/auth/GoogleSignInHelper.kt`, `AuthViewModel.signInWithGoogle()`, `AuthRepositoryImpl.kt` |
 | **Bonus: senzor hardware** | 5 | Accelerometru — „Scutură pentru știri noi”: debouncing, vibrație, Snackbar, pachet nou; activ doar când Feed e vizibil; comutator în Setări | `core/sensor/ShakeDetector.kt`, `FeedScreen.kt`, `SettingsScreen.kt` |
 
 ### Scenariu de demonstrație (≈ 3 minute)
 
 1. **Pornire** → `AuthActivity`. Apasă „Intră în cont” cu câmpurile goale → erorile de validare în română. Scrie un email invalid → eroarea apare la părăsirea câmpului.
-2. **Cont nou** → nume, email, parolă → `MainActivity` (Toast „Bine ai venit, …!”). Rândul apare în tabela `users` (parolă bcrypt).
+2. **Cont nou** → nume, email, parolă → `MainActivity` (Toast „Bine ai venit, …!”). Contul apare în Firebase Console → Authentication, iar profilul în Firestore `users/{uid}`.
 3. **Feed** → salut personalizat; apăsare lungă pe un card → vibrație + meniul contextual → „Marchează ca citit” (Snackbar). Tap pe alt card → Detaliu.
 4. **Meniul „⋮”** → „Resetează istoricul de citire” (Snackbar cu numărul de articole).
 5. **Scuturare** → pe emulator: *Extended controls → Virtual sensors → Device pose*, mișcă rapid dispozitivul (sau `adb emu sensor set acceleration 30:0:9.8` de câteva ori) → „Pachet reîmprospătat prin scuturare!”.
 6. **Setări** → cont, „Scutură pentru știri noi”, notificarea zilnică + alegerea orei.
-7. **Deconectare** → înapoi la `AuthActivity`; „Continuă cu Google” → contul Google (sau selectorul demonstrativ).
+7. **Deconectare** → înapoi la `AuthActivity`; „Continuă cu Google” → selectorul de conturi Google → autentificare Firebase.
 

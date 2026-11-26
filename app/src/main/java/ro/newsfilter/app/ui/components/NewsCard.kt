@@ -1,7 +1,13 @@
 package ro.newsfilter.app.ui.components
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -28,6 +34,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,12 +49,15 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import ro.newsfilter.app.domain.model.MarketSentiment
 import ro.newsfilter.app.domain.model.NewsArticle
 
 private val HeroShape = RoundedCornerShape(20.dp)
@@ -56,7 +69,7 @@ private val ThumbnailShape = RoundedCornerShape(14.dp)
  * pagină a unei reviste:
  *  - imagine 16:9 sus, cu pastila de categorie translucidă peste ea;
  *  - titlu mare (max. 3 rânduri);
- *  - rând de metadate: sursă • timp de citire + buton de salvare.
+ *  - rând de metadate: sursă • timp de citire • pastila de piață + buton de salvare.
  *
  * Evenimente: atingere → detaliu; apăsare lungă → meniu contextual (cu vibrație).
  */
@@ -68,6 +81,7 @@ fun HeroNewsCard(
     modifier: Modifier = Modifier,
     onLongClick: ((NewsArticle) -> Unit)? = null
 ) {
+    var marketExpanded by rememberSaveable(article.id) { mutableStateOf(false) }
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -115,7 +129,14 @@ fun HeroNewsCard(
         MetaRow(
             article = article,
             onBookmarkClick = onBookmarkClick,
+            marketExpanded = marketExpanded,
+            onMarketToggle = { marketExpanded = !marketExpanded },
             modifier = Modifier.padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp)
+        )
+        MarketImpactNote(
+            article = article,
+            visible = marketExpanded,
+            modifier = Modifier.padding(start = 18.dp, end = 18.dp, bottom = 14.dp)
         )
     }
 }
@@ -135,6 +156,7 @@ fun CompactNewsCard(
     modifier: Modifier = Modifier,
     onLongClick: ((NewsArticle) -> Unit)? = null
 ) {
+    var marketExpanded by rememberSaveable(article.id) { mutableStateOf(false) }
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -194,9 +216,20 @@ fun CompactNewsCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             ReadTimeLabel(minutes = article.readTimeMinutes)
+            MarketImpactPill(
+                article = article,
+                expanded = marketExpanded,
+                onToggle = { marketExpanded = !marketExpanded },
+                modifier = Modifier.padding(start = 10.dp)
+            )
             Spacer(modifier = Modifier.weight(1f))
             BookmarkButton(article = article, onBookmarkClick = onBookmarkClick)
         }
+        MarketImpactNote(
+            article = article,
+            visible = marketExpanded,
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
+        )
     }
 }
 
@@ -235,6 +268,8 @@ private fun Modifier.articleClickable(
 private fun MetaRow(
     article: NewsArticle,
     onBookmarkClick: (String) -> Unit,
+    marketExpanded: Boolean,
+    onMarketToggle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -255,8 +290,78 @@ private fun MetaRow(
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         ReadTimeLabel(minutes = article.readTimeMinutes)
+        MarketImpactPill(
+            article = article,
+            expanded = marketExpanded,
+            onToggle = onMarketToggle,
+            modifier = Modifier.padding(start = 10.dp)
+        )
         Spacer(modifier = Modifier.weight(1f))
         BookmarkButton(article = article, onBookmarkClick = onBookmarkClick)
+    }
+}
+
+/**
+ * Pastila Market Pulse (ex. „EUR/RON ↑”), afișată doar dacă AI-ul a legat știrea de o
+ * pereche valutară. Atingerea are propriul `clickable` (nu deschide articolul) și
+ * extinde / restrânge nota de impact de sub card.
+ */
+@Composable
+private fun MarketImpactPill(
+    article: NewsArticle,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val pair = article.affectedCurrency ?: return
+    val sentiment = article.marketSentiment ?: MarketSentiment.NEUTRAL
+    val color = sentimentColor(sentiment)
+    Text(
+        text = "$pair ${sentiment.arrow}",
+        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+        color = color,
+        maxLines = 1,
+        modifier = modifier
+            .clip(RoundedCornerShape(50))
+            .background(color.copy(alpha = if (expanded) 0.22f else 0.12f))
+            .clickable(
+                role = Role.Button,
+                onClickLabel = if (expanded) "Ascunde impactul pe piață" else "Vezi impactul pe piață",
+                enabled = !article.marketImpactNote.isNullOrBlank(),
+                onClick = onToggle
+            )
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    )
+}
+
+/** Nota AI de impact pe piață, afișată sub card după atingerea pastilei. */
+@Composable
+private fun MarketImpactNote(article: NewsArticle, visible: Boolean, modifier: Modifier = Modifier) {
+    val note = article.marketImpactNote?.takeIf { article.affectedCurrency != null && it.isNotBlank() } ?: return
+    AnimatedVisibility(
+        visible = visible,
+        enter = expandVertically() + fadeIn(),
+        exit = shrinkVertically() + fadeOut()
+    ) {
+        Column(
+            modifier = modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                .padding(horizontal = 12.dp, vertical = 10.dp)
+        ) {
+            Text(
+                text = "Impact estimat de AI",
+                style = MaterialTheme.typography.labelSmall,
+                color = sentimentColor(article.marketSentiment)
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
     }
 }
 

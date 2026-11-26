@@ -80,6 +80,16 @@ data class NewsEntity(
     @ColumnInfo(name = "deep_dive")
     val deepDive: String? = null,
 
+    /** Market Pulse: perechea valutară influențată, direcția (UP/DOWN/NEUTRAL) și nota AI. */
+    @ColumnInfo(name = "affected_currency")
+    val affectedCurrency: String? = null,
+
+    @ColumnInfo(name = "market_sentiment")
+    val marketSentiment: String? = null,
+
+    @ColumnInfo(name = "market_impact_note")
+    val marketImpactNote: String? = null,
+
     @ColumnInfo(name = "cached_at")
     val cachedAt: Long = System.currentTimeMillis()
 )
