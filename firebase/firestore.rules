@@ -7,6 +7,72 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isOwner(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // ID-urile articolelor sunt sha1(url)[0..20] — limităm doar lungimea.
+    function validId(id) {
+      return id.size() <= 64;
+    }
+
+    function str(d, k, max) {
+      return d[k] is string && d[k].size() <= max;
+    }
+
+    // Câmp opțional: lipsă, null sau string de cel mult `max` caractere.
+    function optStr(d, k, max) {
+      return !(k in d) || d[k] == null || str(d, k, max);
+    }
+
+    function optList(d, k, max) {
+      return !(k in d) || d[k] == null || (d[k] is list && d[k].size() <= max);
+    }
+
+    // users/{uid} — scris de AuthRepositoryImpl.saveProfile.
+    function validProfile(d) {
+      return d.keys().hasOnly(['name', 'email', 'authProvider', 'lastLoginAt', 'createdAt'])
+        && str(d, 'name', 200)
+        && str(d, 'email', 320)
+        && d.authProvider in ['email', 'google']
+        && d.lastLoginAt is timestamp
+        && (!('createdAt' in d) || d.createdAt is timestamp);
+    }
+
+    // users/{uid}/bookmarks/{id} — NewsArticle.toBookmarkData() din FirestoreMappers.kt
+    // (fullContent are max. 15 000 de caractere în jobul de sincronizare).
+    function validBookmark(d) {
+      return d.keys().hasOnly([
+          'title', 'source', 'imageUrl', 'summary', 'articleUrl', 'readTimeMinutes',
+          'category', 'publishedAt', 'fullContent', 'aiSummary', 'aiBullets', 'aiTags',
+          'deepDive', 'affectedCurrency', 'marketSentiment', 'marketImpactNote', 'createdAt'])
+        && str(d, 'title', 1000)
+        && str(d, 'articleUrl', 2048)
+        && optStr(d, 'source', 200)
+        && optStr(d, 'imageUrl', 2048)
+        && optStr(d, 'summary', 5000)
+        && (!('readTimeMinutes' in d) || d.readTimeMinutes is int)
+        && optStr(d, 'category', 50)
+        && optStr(d, 'publishedAt', 100)
+        && optStr(d, 'fullContent', 20000)
+        && optStr(d, 'aiSummary', 5000)
+        && optList(d, 'aiBullets', 10)
+        && optList(d, 'aiTags', 10)
+        && optStr(d, 'deepDive', 10000)
+        && optStr(d, 'affectedCurrency', 16)
+        && (!('marketSentiment' in d) || d.marketSentiment == null
+            || d.marketSentiment in ['UP', 'DOWN', 'NEUTRAL'])
+        && optStr(d, 'marketImpactNote', 1000)
+        && d.createdAt == request.time;
+    }
+
+    // users/{uid}/votes/{id} — NewsRepositoryImpl.sendFeedback.
+    function validVote(d) {
+      return d.keys().hasOnly(['positive', 'votedAt'])
+        && d.positive is bool
+        && d.votedAt == request.time;
+    }
+
     match /articles/{articleId} {
       allow read: if request.auth != null;
       allow write: if false;
@@ -22,11 +88,24 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Datele personale: doar profilul, favoritele și voturile, doar pentru proprietar.
+    // Cheile și mărimile sunt validate ca un cont să nu poată umple baza de date / cota comună;
+    // orice altă subcolecție de sub users/{uid} cade pe regula finală (închisă).
     match /users/{uid} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read: if isOwner(uid);
+      // set(merge): request.resource.data este documentul rezultat după îmbinare.
+      allow create, update: if isOwner(uid) && validProfile(request.resource.data);
 
-      match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+      match /bookmarks/{articleId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validId(articleId)
+          && validBookmark(request.resource.data);
+      }
+
+      match /votes/{articleId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if isOwner(uid) && validId(articleId)
+          && validVote(request.resource.data);
       }
     }
 
