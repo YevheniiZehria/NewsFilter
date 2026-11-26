@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
@@ -27,6 +28,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -64,6 +66,9 @@ import ro.newsfilter.app.ui.components.ErrorView
 import ro.newsfilter.app.ui.components.HeroNewsCard
 import ro.newsfilter.app.ui.components.LoadingShimmer
 import ro.newsfilter.app.ui.components.MarketWidgetCard
+import ro.newsfilter.app.core.notifications.DeepLink
+import ro.newsfilter.app.core.notifications.DeepLinks
+import ro.newsfilter.app.domain.model.MarketPairs
 import ro.newsfilter.app.ui.components.OfflineBanner
 import ro.newsfilter.app.ui.components.ScreenHeader
 import ro.newsfilter.app.ui.components.StatusView
@@ -78,7 +83,8 @@ import java.util.Locale
  *  1. Antet minimalist: salut în funcție de oră + data curentă în română;
  *  2. Selectorul de buget de timp (pastilă 2 / 5 / 15 min);
  *  3. Rezumatul bugetului: badge „3 articole • 4 din 5 min” + bară de progres;
- *  4. Primul articol ca card Hero, restul ca carduri compacte.
+ *  4. Chip-ul „Trending azi” (știrile de azi cele mai votate);
+ *  5. Primul articol ca card Hero, restul ca carduri compacte.
  *
  * Evenimente UI:
  *  - atingere pe card → detaliu; apăsare lungă → [ArticleActionsSheet] (meniu contextual);
@@ -144,6 +150,18 @@ fun FeedScreen(
         }
     }
 
+    // Alertă de curs atinsă (FCM): widget-ul trece pe perechea din notificare și e adus în vizor.
+    val listState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        DeepLinks.pending.collect { link ->
+            if (link is DeepLink.MarketPair) {
+                DeepLinks.consume(link)
+                MarketPairs.normalize(link.pair)?.let { viewModel.selectMarketPair(it) }
+                listState.animateScrollToItem(0)
+            }
+        }
+    }
+
     // Senzor: scutură telefonul pentru un pachet nou (activ doar cât ecranul e vizibil)
     ShakeToRefreshEffect(enabled = uiState.shakeToRefreshEnabled) {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -173,6 +191,7 @@ fun FeedScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 LazyColumn(
+                    state = listState,
                     contentPadding = PaddingValues(bottom = 88.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxSize()
@@ -220,7 +239,19 @@ fun FeedScreen(
                         }
                     }
 
-                    // === 3. Conținut: cele mai recente știri ===
+                    // === 3. Chip „Trending azi”: știrile de azi cele mai votate de comunitate ===
+                    item(key = "trending_chip") {
+                        FilterChip(
+                            selected = uiState.trendingOnly,
+                            onClick = viewModel::toggleTrending,
+                            label = { Text("🔥 Trending azi") },
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp)
+                                .animateItem()
+                        )
+                    }
+
+                    // === 4. Conținut: cele mai recente știri ===
                     when (contentState) {
                         FeedContent.Loading -> item(key = "loading") {
                             LoadingShimmer(
@@ -244,9 +275,13 @@ fun FeedScreen(
                         FeedContent.Empty -> item(key = "empty") {
                             StatusView(
                                 icon = Icons.Outlined.DoneAll,
-                                title = "Ești la zi!",
-                                message = "Nu am găsit știri noi pentru preferințele tale. " +
-                                    "Adaugă mai multe domenii din Setări sau reîmprospătează.",
+                                title = if (uiState.trendingOnly) "Nimic în trending încă" else "Ești la zi!",
+                                message = if (uiState.trendingOnly) {
+                                    "Nicio știre de azi nu a primit încă voturi. Votează 👍 știrile utile din ecranul articolului."
+                                } else {
+                                    "Nu am găsit știri noi pentru preferințele tale. " +
+                                        "Adaugă mai multe domenii din Setări sau reîmprospătează."
+                                },
                                 actionLabel = "Reîmprospătează",
                                 actionIcon = Icons.Filled.Refresh,
                                 onAction = { viewModel.loadNews() },
@@ -266,7 +301,7 @@ fun FeedScreen(
                             if (index == 0) {
                                 Column(modifier = itemModifier) {
                                     Text(
-                                        text = "Cele mai recente știri",
+                                        text = if (uiState.trendingOnly) "Cele mai votate azi" else "Cele mai recente știri",
                                         style = MaterialTheme.typography.titleSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(start = 4.dp, bottom = 10.dp)
@@ -282,7 +317,7 @@ fun FeedScreen(
                                 Column(modifier = itemModifier) {
                                     if (index == 1) {
                                         Text(
-                                            text = "Mai multe știri recente",
+                                            text = if (uiState.trendingOnly) "Tot în trending" else "Mai multe știri recente",
                                             style = MaterialTheme.typography.titleSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 12.dp)
@@ -341,7 +376,7 @@ fun FeedScreen(
             onDismiss = { menuArticle = null },
             onToggleBookmark = viewModel::toggleBookmarkFromMenu,
             onMarkAsRead = { viewModel.markAsReadFromMenu(it.id) },
-            onShare = { ArticleIntents.share(context, it.title, it.articleUrl) },
+            onShare = { ArticleIntents.share(context, it.displayTitle, it.articleUrl) },
             onOpenInBrowser = { ArticleIntents.openInBrowser(context, it.articleUrl, toolbarColor) }
         )
     }

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
@@ -51,6 +52,8 @@ data class FeedUiState(
     val isServerRefreshRunning: Boolean = false,
     val selectedMinutes: Int = 5,
     val selectedCategories: List<String> = emptyList(),
+    /** Chip-ul „Trending azi”: lista arată știrile de azi cele mai votate, în locul feed-ului. */
+    val trendingOnly: Boolean = false,
     val totalReadTimeMinutes: Int = 0,
     val error: String? = null,
     /** Prenumele utilizatorului autentificat, pentru salutul personalizat. */
@@ -146,6 +149,7 @@ class FeedViewModel @Inject constructor(
     val marketEventTargets: Flow<MarketEventTarget> = _marketEventTargets.receiveAsFlow()
 
     private val categories = MutableStateFlow<List<String>?>(null)
+    private val trendingOnly = MutableStateFlow(false)
     private var syncJob: Job? = null
     private var chartJob: Job? = null
 
@@ -185,10 +189,12 @@ class FeedViewModel @Inject constructor(
                 }
         }
 
-        // Sursa unică de adevăr pentru listă: cache-ul Room.
+        // Sursa unică de adevăr pentru listă: cache-ul Room (feed-ul personal sau „Trending azi”).
         viewModelScope.launch {
-            categories.filterNotNull()
-                .flatMapLatest { newsRepository.observeFeed(it) }
+            combine(categories.filterNotNull(), trendingOnly, ::Pair)
+                .flatMapLatest { (selected, trending) ->
+                    if (trending) newsRepository.observeTrending() else newsRepository.observeFeed(selected)
+                }
                 .collect { articles ->
                     _uiState.update {
                         it.copy(
@@ -359,6 +365,13 @@ class FeedViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /** Chip-ul „Trending azi” (filtru local, fără citiri din Firestore). */
+    fun toggleTrending() {
+        val enabled = !trendingOnly.value
+        trendingOnly.value = enabled
+        _uiState.update { it.copy(trendingOnly = enabled) }
     }
 
     /** Schimbă timpul de lectură și resincronizează. */

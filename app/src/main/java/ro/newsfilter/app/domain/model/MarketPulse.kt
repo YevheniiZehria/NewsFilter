@@ -122,8 +122,23 @@ data class MarketHistory(
     )
 }
 
-/** Cursurile curente (`market/pulse`) + cea mai recentă știre care le influențează. */
+/**
+ * Sentimentul comunității pentru o pereche: câte știri validate de cititori (upvotes > downvotes)
+ * anunță aprecierea ([bullish]) sau deprecierea ([bearish]) primei monede.
+ */
+data class CommunitySentiment(val bullish: Int, val bearish: Int) {
+    val total: Int get() = bullish + bearish
+
+    /** Văzut din perechea inversă (ex. USD/RON bullish = RON/USD bearish). */
+    fun inverted(): CommunitySentiment = CommunitySentiment(bullish = bearish, bearish = bullish)
+}
+
+/**
+ * Cursurile curente (`market/pulse`) + cea mai recentă știre care le influențează
+ * + sentimentul comunității pe pereche ([communitySentiment], calculat din Room).
+ */
 data class MarketPulse(
     val rates: List<MarketRate>,
-    val latestEvent: MarketEvent?
+    val latestEvent: MarketEvent?,
+    val communitySentiment: Map<String, CommunitySentiment> = emptyMap()
 )

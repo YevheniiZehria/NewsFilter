@@ -123,7 +123,7 @@ fun AudioMiniPlayer(
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = article.title,
+                            text = article.displayTitle,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             fontWeight = FontWeight.Medium,

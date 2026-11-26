@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Schedule
@@ -113,9 +114,12 @@ fun SettingsScreen(
     }
 
     // Sincronizare: switch activ, dar permisiunea lipsește → îl dezactivăm.
-    LaunchedEffect(notificationsAllowed, prefs.dailyNotificationEnabled) {
+    LaunchedEffect(notificationsAllowed, prefs.dailyNotificationEnabled, prefs.marketAlertsEnabled) {
         if (prefs.dailyNotificationEnabled && !notificationsAllowed) {
             viewModel.setDailyNotification(false)
+        }
+        if (prefs.marketAlertsEnabled && !notificationsAllowed) {
+            viewModel.setMarketAlerts(false)
         }
     }
 
@@ -140,6 +144,30 @@ fun SettingsScreen(
         notificationsAllowed = context.areNotificationsAllowed()
         viewModel.setDailyNotification(isGranted)
         if (!isGranted) showPermissionSnackbar()
+    }
+
+    fun showMarketAlertsError() {
+        scope.launch {
+            snackbarHostState.showSnackbar("Nu am putut actualiza alertele de piață. Verifică conexiunea și încearcă din nou.")
+        }
+    }
+
+    // Launcher separat pentru alertele de piață (același dialog de sistem, altă acțiune la final).
+    val marketPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        notificationsAllowed = context.areNotificationsAllowed()
+        if (isGranted) viewModel.setMarketAlerts(true, ::showMarketAlertsError) else showPermissionSnackbar()
+    }
+
+    fun onMarketAlertsToggle(enable: Boolean) {
+        when {
+            !enable -> viewModel.setMarketAlerts(false, ::showMarketAlertsError)
+            context.areNotificationsAllowed() -> viewModel.setMarketAlerts(true, ::showMarketAlertsError)
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+                marketPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            else -> showPermissionSnackbar()
+        }
     }
 
     fun onDailyNotificationToggle(enable: Boolean) {
@@ -379,6 +407,42 @@ fun SettingsScreen(
                     modifier = Modifier.clickable(
                         onClickLabel = "Schimbă ora notificării",
                         onClick = { showTimePicker = true }
+                    )
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+                ListItem(
+                    headlineContent = { Text("Alerte de piață") },
+                    supportingContent = {
+                        Text(
+                            when {
+                                prefs.marketAlertsEnabled ->
+                                    "Mișcări de peste 1,5% la EUR/RON, USD/RON, BTC/USD și știri cu impact major"
+                                !notificationsAllowed ->
+                                    "Notificările sunt blocate — atinge pentru a le permite"
+                                else -> "Dezactivat"
+                            }
+                        )
+                    },
+                    leadingContent = {
+                        SettingsIcon(
+                            if (prefs.marketAlertsEnabled) {
+                                Icons.Outlined.NotificationsActive
+                            } else {
+                                Icons.Outlined.NotificationsOff
+                            }
+                        )
+                    },
+                    trailingContent = {
+                        Switch(checked = prefs.marketAlertsEnabled, onCheckedChange = null)
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.toggleable(
+                        value = prefs.marketAlertsEnabled,
+                        role = Role.Switch,
+                        onValueChange = ::onMarketAlertsToggle
                     )
                 )
             }

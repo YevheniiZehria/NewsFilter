@@ -40,7 +40,7 @@ data class DetailUiState(
  * - Încarcă articolul din cache-ul local (Room) — funcționează și offline.
  * - La deschidere, marchează automat articolul ca citit.
  * - Restaurează votul salvat (Like / Dislike rămâne vizibil la redeschidere).
- * - Acțiuni în Firestore: vot (`users/{uid}/votes`), favorit (`users/{uid}/bookmarks`), „Aprofundează” (`articles/{id}`).
+ * - Acțiuni în Firestore: vot (`users/{uid}/votes` + contoarele `articles/{id}`), favorit (`users/{uid}/bookmarks`), „Aprofundează” (`articles/{id}`).
  */
 @HiltViewModel
 class DetailViewModel @Inject constructor(
@@ -96,23 +96,34 @@ class DetailViewModel @Inject constructor(
     }
 
     /**
-     * Salvează feedback-ul (like/dislike) în Firestore (o singură dată per articol)
-     * și salvează votul local, ca să fie reținut la redeschiderea articolului.
+     * Votul comunității: apăsarea aceluiași buton retrage votul, celălalt buton îl schimbă.
+     * Actualizare optimistă (UI + Room); dacă Firestore respinge / e offline, revenim la votul anterior.
      */
-    fun sendFeedback(isPositive: Boolean) {
-        if (_uiState.value.isFeedbackSent) return
-        // Actualizare optimistă: UI-ul reacționează instantaneu, votul se salvează
-        // în Room, iar votul se salvează în Firestore în fundal.
-        _uiState.update { state ->
-            state.copy(
-                isFeedbackSent = true,
-                feedbackPositive = isPositive,
-                article = state.article?.copy(userVote = isPositive)
-            )
-        }
+    fun vote(isPositive: Boolean) {
+        val article = _uiState.value.article ?: return
+        val before = article.userVote
+        val after = if (before == isPositive) null else isPositive
+        showVote(article, before, after)
         viewModelScope.launch {
-            newsRepository.setUserVote(articleId, isPositive)
-            newsRepository.sendFeedback(articleId, isPositive)
+            if (!newsRepository.setVote(articleId, after)) {
+                _uiState.value.article?.let { showVote(it, after, before) }
+                _messages.send("Votul nu a putut fi trimis. Verifică conexiunea și încearcă din nou.")
+            }
+        }
+    }
+
+    private fun showVote(article: NewsArticle, before: Boolean?, after: Boolean?) {
+        fun delta(positive: Boolean) = (if (after == positive) 1 else 0) - (if (before == positive) 1 else 0)
+        _uiState.update {
+            it.copy(
+                isFeedbackSent = after != null,
+                feedbackPositive = after,
+                article = article.copy(
+                    userVote = after,
+                    upvotes = (article.upvotes + delta(true)).coerceAtLeast(0),
+                    downvotes = (article.downvotes + delta(false)).coerceAtLeast(0)
+                )
+            )
         }
     }
 

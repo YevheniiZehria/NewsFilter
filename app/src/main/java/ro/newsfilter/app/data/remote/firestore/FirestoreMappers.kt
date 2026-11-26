@@ -12,7 +12,7 @@ import ro.newsfilter.app.domain.model.NewsArticle
  * Structura Cloud Firestore (scrisă de jobul `sync/` din GitHub Actions și de aplicație):
  *
  * ```
- * articles/{id}                        știrile procesate (doar citire din aplicație)
+ * articles/{id}                        știrile procesate (aplicația scrie doar upvotes / downvotes)
  * market/pulse                         cursurile curente: rates.{EUR_RON|USD_RON|BTC_USD}
  * market_history/{PAIR}_intraday       puncte la 30 min, ultimele 30 de zile (1 Z / 5 Z / 1 L)
  * market_history/{PAIR}_daily          puncte zilnice, max. 5 ani (1 A / Max)
@@ -54,13 +54,16 @@ fun DocumentSnapshot.toNewsArticleOrNull(isBookmarked: Boolean = false): NewsArt
         publishedAt = getString("publishedAt").orEmpty(),
         isBookmarked = isBookmarked,
         fullContent = getString("fullContent"),
+        aiTitle = getString("aiTitle")?.trim()?.takeIf { it.isNotEmpty() },
         aiSummary = getString("aiSummary"),
         aiBullets = stringList("aiBullets"),
         aiTags = stringList("aiTags"),
         deepDive = getString("deepDive")?.takeIf { it.isNotBlank() },
         affectedCurrency = MarketPairs.normalize(getString("affectedCurrency")),
         marketSentiment = MarketSentiment.fromRaw(getString("marketSentiment")),
-        marketImpactNote = getString("marketImpactNote")?.trim()?.takeIf { it.isNotEmpty() }
+        marketImpactNote = getString("marketImpactNote")?.trim()?.takeIf { it.isNotEmpty() },
+        upvotes = (getLong("upvotes") ?: 0L).toInt().coerceAtLeast(0),
+        downvotes = (getLong("downvotes") ?: 0L).toInt().coerceAtLeast(0)
     )
 }
 
@@ -75,6 +78,7 @@ fun NewsArticle.toBookmarkData(): Map<String, Any?> = mapOf(
     "category" to category,
     "publishedAt" to publishedAt,
     "fullContent" to fullContent,
+    "aiTitle" to aiTitle,
     "aiSummary" to aiSummary,
     "aiBullets" to aiBullets,
     "aiTags" to aiTags,

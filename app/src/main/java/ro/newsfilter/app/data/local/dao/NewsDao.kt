@@ -61,9 +61,44 @@ interface NewsDao {
     @Query("UPDATE news SET is_bookmarked = :bookmarked WHERE id = :articleId")
     suspend fun setBookmarked(articleId: String, bookmarked: Boolean)
 
-    /** Votul utilizatorului (true = like, false = dislike, null = fără vot). */
-    @Query("UPDATE news SET user_vote = :vote WHERE id = :articleId")
-    suspend fun setUserVote(articleId: String, vote: Boolean?)
+    /**
+     * Votul utilizatorului (true = like, false = dislike, null = fără vot) + actualizarea optimistă
+     * a contoarelor comunității cu [upDelta] / [downDelta] (-1 / 0 / +1).
+     */
+    @Query(
+        """
+        UPDATE news SET user_vote = :vote,
+            upvotes = MAX(0, upvotes + :upDelta),
+            downvotes = MAX(0, downvotes + :downDelta)
+        WHERE id = :articleId
+        """
+    )
+    suspend fun applyVote(articleId: String, vote: Boolean?, upDelta: Int, downDelta: Int)
+
+    /** „Trending azi”: știrile publicate după [since] (ISO 8601 UTC), cele mai votate primele. */
+    @Query(
+        """
+        SELECT * FROM news
+        WHERE published_at >= :since AND upvotes > 0
+        ORDER BY upvotes DESC, published_at DESC
+        LIMIT :limit
+        """
+    )
+    fun observeTrending(since: String, limit: Int): Flow<List<NewsEntity>>
+
+    /**
+     * Sentimentul comunității pe piață: știrile cu impact UP / DOWN pe care cititorii le-au
+     * validat (upvotes > downvotes), numărate pe pereche și direcție.
+     */
+    @Query(
+        """
+        SELECT affected_currency AS pair, market_sentiment AS sentiment, COUNT(*) AS count FROM news
+        WHERE affected_currency IS NOT NULL AND market_sentiment IN ('UP', 'DOWN')
+            AND upvotes > downvotes AND published_at >= :since
+        GROUP BY affected_currency, market_sentiment
+        """
+    )
+    fun observeCommunitySentiment(since: String): Flow<List<SentimentCount>>
 
     @Query("UPDATE news SET deep_dive = :deepDive WHERE id = :articleId")
     suspend fun setDeepDive(articleId: String, deepDive: String)
@@ -104,3 +139,6 @@ interface NewsDao {
     @Query("DELETE FROM news")
     suspend fun clearAll()
 }
+
+/** Rând agregat pentru [NewsDao.observeCommunitySentiment]. */
+data class SentimentCount(val pair: String, val sentiment: String, val count: Int)

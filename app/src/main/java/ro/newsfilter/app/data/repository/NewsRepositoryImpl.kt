@@ -6,9 +6,12 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.Source
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
 import ro.newsfilter.app.core.auth.SessionManager
 import ro.newsfilter.app.core.network.UserFacingException
@@ -23,6 +26,8 @@ import ro.newsfilter.app.data.remote.firestore.toNewsArticleOrNull
 import ro.newsfilter.app.domain.model.NewsArticle
 import ro.newsfilter.app.domain.repository.NewsRepository
 import java.io.IOException
+import java.time.LocalDate
+import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -35,6 +40,7 @@ import javax.inject.Singleton
  * UI ◄── Flow ── Room (sursa unică de adevăr) ◄── syncFeed() ◄── Firestore `articles`
  *  │                                                   ▲             (scrise de jobul sync/)
  *  └── acțiuni (citit / salvat / vot) ──► Room ──► users/{uid}/bookmarks, users/{uid}/votes
+ *                                                   (+ contoarele upvotes / downvotes din articles/{id})
  * ```
  * - Aplicația pornește instantaneu din cache; sincronizarea rulează în fundal
  *   (la deschidere, pull-to-refresh, periodic prin `NewsSyncWorker`).
@@ -51,6 +57,9 @@ class NewsRepositoryImpl @Inject constructor(
     private val newsDao: NewsDao,
     private val networkMonitor: NetworkMonitor
 ) : NewsRepository {
+
+    /** Voturile rapide (ex. 👍 apoi 👎) se trimit pe rând: fiecare tranziție pornește de la cea anterioară. */
+    private val voteMutex = Mutex()
 
     override fun observeFeed(categories: List<String>): Flow<List<NewsArticle>> =
         newsDao.observeFeed(categories, FEED_LIMIT).map { list -> list.map { it.toDomain() } }
@@ -105,20 +114,60 @@ class NewsRepositoryImpl @Inject constructor(
         return text
     }
 
-    override suspend fun sendFeedback(articleId: String, isPositive: Boolean) {
+    /**
+     * Votul comunității. Room se actualizează optimist (votul + contoarele); în Firestore votul
+     * (`users/{uid}/votes/{id}`) și `FieldValue.increment(±1)` pe `articles/{id}` pleacă într-un
+     * singur [com.google.firebase.firestore.WriteBatch], iar regulile verifică tranziția
+     * (vot nou / schimbat / retras) față de votul anterior de pe server.
+     */
+    override suspend fun setVote(articleId: String, isPositive: Boolean?): Boolean = voteMutex.withLock {
+        val localBefore = newsDao.getArticleById(articleId)?.userVote
+        if (localBefore == isPositive) return@withLock true
+        newsDao.applyVote(
+            articleId, isPositive,
+            upDelta = voteDelta(localBefore, isPositive, positive = true),
+            downDelta = voteDelta(localBefore, isPositive, positive = false)
+        )
         try {
-            userCollection(FirestorePaths.VOTES).document(articleId)
-                .set(mapOf("positive" to isPositive, "votedAt" to FieldValue.serverTimestamp()))
-                .await()
+            ensureOnline()
+            val voteRef = userCollection(FirestorePaths.VOTES).document(articleId)
+            // Votul anterior de pe server (poate diferi de cel local, ex. după reautentificare):
+            // contoarele se corectează față de el, altfel regulile resping batch-ul.
+            val serverBefore = voteRef.get(Source.SERVER).await().takeIf { it.exists() }?.getBoolean("positive")
+            if (serverBefore == isPositive) return@withLock true
+
+            val counters = mutableMapOf<String, Any>(UPDATED_AT to FieldValue.serverTimestamp())
+            voteDelta(serverBefore, isPositive, positive = true).takeIf { it != 0 }
+                ?.let { counters[UPVOTES] = FieldValue.increment(it.toLong()) }
+            voteDelta(serverBefore, isPositive, positive = false).takeIf { it != 0 }
+                ?.let { counters[DOWNVOTES] = FieldValue.increment(it.toLong()) }
+
+            val batch = firestore.batch()
+            if (isPositive == null) {
+                batch.delete(voteRef)
+            } else {
+                batch.set(voteRef, mapOf("positive" to isPositive, "votedAt" to FieldValue.serverTimestamp()))
+            }
+            batch.update(firestore.collection(FirestorePaths.ARTICLES).document(articleId), counters)
+            batch.commit().await()
+            true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Log.w(TAG, "Votul nu a putut fi salvat în Firestore: ${e.message}")
+            // Revenim la starea anterioară: contoarele locale nu trebuie să conțină voturi netrimise.
+            newsDao.applyVote(
+                articleId, localBefore,
+                upDelta = voteDelta(isPositive, localBefore, positive = true),
+                downDelta = voteDelta(isPositive, localBefore, positive = false)
+            )
+            false
         }
     }
 
-    override suspend fun setUserVote(articleId: String, isPositive: Boolean?) {
-        newsDao.setUserVote(articleId, isPositive)
+    override fun observeTrending(): Flow<List<NewsArticle>> {
+        val startOfToday = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toString()
+        return newsDao.observeTrending(startOfToday, FEED_LIMIT).map { list -> list.map { it.toDomain() } }
     }
 
     override suspend fun markAsRead(articleId: String) {
@@ -174,7 +223,10 @@ class NewsRepositoryImpl @Inject constructor(
                 isRead = local?.isRead ?: false,
                 isBookmarked = if (serverBookmarksWin || local == null) article.isBookmarked else local.isBookmarked,
                 userVote = local?.userVote,
-                deepDive = article.deepDive ?: local?.deepDive
+                deepDive = article.deepDive ?: local?.deepDive,
+                // Copiile din favorite nu au contoare: păstrăm valorile venite din `articles`.
+                upvotes = if (serverBookmarksWin) local?.upvotes ?: 0 else article.upvotes,
+                downvotes = if (serverBookmarksWin) local?.downvotes ?: 0 else article.downvotes
             ).toEntity()
         }
         newsDao.insertAll(entities)
@@ -196,9 +248,15 @@ class NewsRepositoryImpl @Inject constructor(
         const val TAG = "NewsFilter"
         const val FEED_LIMIT = 50
         const val UPDATED_AT = "updatedAt"
+        const val UPVOTES = "upvotes"
+        const val DOWNVOTES = "downvotes"
         const val INITIAL_LIMIT = 200L
         const val PAGE_SIZE = 200L
         const val MAX_PAGES = 3
+
+        /** Variația contorului (upvotes dacă [positive], altfel downvotes) la trecerea [before] → [after]. */
+        fun voteDelta(before: Boolean?, after: Boolean?, positive: Boolean): Int =
+            (if (after == positive) 1 else 0) - (if (before == positive) 1 else 0)
 
         /** Timestamp-urile Firestore au precizie de microsecunde: le păstrăm exact (fără re-citiri). */
         fun Timestamp.toMicros(): Long = seconds * 1_000_000 + nanoseconds / 1_000

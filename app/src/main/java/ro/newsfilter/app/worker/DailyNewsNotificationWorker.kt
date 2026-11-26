@@ -58,7 +58,7 @@ class DailyNewsNotificationWorker @AssistedInject constructor(
             val articles = newsRepository.observeFeed(categories).first()
 
             if (articles.isNotEmpty()) {
-                showNotification(articles.size, prefs.defaultMinutes, articles.map { it.title })
+                showNotification(articles.size, prefs.defaultMinutes, articles.map { it.displayTitle })
             }
 
             Result.success()

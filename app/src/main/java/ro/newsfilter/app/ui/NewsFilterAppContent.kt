@@ -40,6 +40,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import ro.newsfilter.app.R
+import ro.newsfilter.app.core.notifications.DeepLink
+import ro.newsfilter.app.core.notifications.DeepLinks
 import ro.newsfilter.app.ui.components.AudioMiniPlayer
 import ro.newsfilter.app.ui.navigation.BottomNavBar
 import ro.newsfilter.app.ui.navigation.NavGraph
@@ -88,6 +90,24 @@ fun NewsFilterAppContent(
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+
+    // Alertele de piață (FCM): articol → Detaliu; pereche valutară → Feed (widget-ul e
+    // selectat de FeedScreen). Așteptăm finalizarea Onboarding-ului înainte de a naviga.
+    val pendingLink by DeepLinks.pending.collectAsStateWithLifecycle()
+    LaunchedEffect(pendingLink, prefs.onboardingCompleted) {
+        val link = pendingLink ?: return@LaunchedEffect
+        if (!prefs.onboardingCompleted) return@LaunchedEffect
+        when (link) {
+            is DeepLink.Article -> {
+                navController.navigate(Routes.Detail.createRoute(link.articleId)) { launchSingleTop = true }
+                DeepLinks.consume(link)
+            }
+            is DeepLink.MarketPair -> navController.navigate(Routes.Feed.route) {
+                popUpTo(Routes.Feed.route)
+                launchSingleTop = true
+            }
+        }
+    }
 
     val shouldShowBottomBar = currentRoute in listOf(
         Routes.Feed.route,

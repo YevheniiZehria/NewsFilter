@@ -17,6 +17,7 @@ package ro.newsfilter.app.domain.model
  * @property isBookmarked Dacă articolul este salvat la favorite
  * @property userVote Votul utilizatorului (true = îmi place, false = nu-mi place, null = nevotat)
  * @property fullContent Textul integral (scraping); null = indisponibil
+ * @property aiTitle Titlul tradus în română de Gemini; null = articol încă neprocesat (se afișează originalul)
  * @property aiSummary Rezumatul Gemini în română; null = AI-ul nu a rulat încă
  * @property aiBullets Smart Digest: 2-3 idei cheie (TL;DR), afișate înaintea articolului
  * @property aiTags Etichete de subiect generate de AI (persoane, locuri, teme)
@@ -24,6 +25,7 @@ package ro.newsfilter.app.domain.model
  * @property affectedCurrency Perechea valutară influențată (ex. „EUR/RON”), după AI; null = fără impact
  * @property marketSentiment Direcția estimată a perechii
  * @property marketImpactNote Explicația AI într-o propoziție
+ * @property upvotes / [downvotes] Voturile comunității (contoare din `articles/{id}`)
  */
 data class NewsArticle(
     val id: String,
@@ -39,14 +41,36 @@ data class NewsArticle(
     val isBookmarked: Boolean = false,
     val userVote: Boolean? = null,
     val fullContent: String? = null,
+    val aiTitle: String? = null,
     val aiSummary: String? = null,
     val aiBullets: List<String> = emptyList(),
     val aiTags: List<String> = emptyList(),
     val deepDive: String? = null,
     val affectedCurrency: String? = null,
     val marketSentiment: MarketSentiment? = null,
-    val marketImpactNote: String? = null
+    val marketImpactNote: String? = null,
+    val upvotes: Int = 0,
+    val downvotes: Int = 0
 ) {
+    /** Titlul afișat: traducerea în română, cu fallback la titlul original (engleză). */
+    val displayTitle: String
+        get() = aiTitle?.takeIf { it.isNotBlank() } ?: title
+
+    /** Rezumatul afișat: rezumatul AI în română, cu fallback la descrierea RSS (engleză). */
+    val displaySummary: String
+        get() = aiSummary?.takeIf { it.isNotBlank() } ?: summary
+
+    /** True după ce jobul de sincronizare a generat conținutul în română (Gemini). */
+    val isAiProcessed: Boolean
+        get() = !aiSummary.isNullOrBlank()
+
+    /** Procentul cititorilor care au găsit știrea utilă; null sub [MIN_VOTES_FOR_BADGE] voturi. */
+    val usefulPercent: Int?
+        get() {
+            val total = upvotes + downvotes
+            return if (total < MIN_VOTES_FOR_BADGE) null else Math.round(upvotes * 100f / total)
+        }
+
     /** Label-ul categoriei în română, dacă e recunoscută. */
     val categoryLabel: String
         get() = Category.fromSlug(category)?.label ?: category.replaceFirstChar { it.uppercase() }
@@ -54,4 +78,8 @@ data class NewsArticle(
     /** Emoji-ul categoriei. */
     val categoryEmoji: String
         get() = Category.fromSlug(category)?.emoji ?: "📰"
+
+    companion object {
+        const val MIN_VOTES_FOR_BADGE = 3
+    }
 }

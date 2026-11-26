@@ -86,7 +86,7 @@ fun ArticleActionsSheet(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = article.title,
+                    text = article.displayTitle,
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
