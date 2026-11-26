@@ -1,0 +1,1951 @@
+{
+  "name": "NewsFilter - API Webhooks",
+  "nodes": [
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"error\", \"message\": \"Cheie API invalidă\" }",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 403
+        }
+      },
+      "name": "Răspuns 403 cheie invalidă",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "453e2b80-7fa5-5f60-8655-57852e75339a",
+      "position": [
+        1980,
+        -220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"error\", \"message\": \"Sesiune invalidă sau expirată\" }",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 401
+        }
+      },
+      "name": "Răspuns 401 sesiune invalidă",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "5644550a-c345-5e64-94a4-c0447c118255",
+      "position": [
+        1980,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "auth/login",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook POST /auth/login",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-auth-login-post",
+      "id": "9b01338d-c2ae-5bed-ba88-7489be5435c4",
+      "position": [
+        200,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook POST /auth/login').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /auth/login",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "77e9a97a-b18f-54eb-9077-799a0881540f",
+      "position": [
+        420,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH u AS (\n  UPDATE users SET last_login_at = NOW()\n  WHERE email = lower(trim($1))\n    AND password_hash IS NOT NULL\n    AND password_hash = crypt($2, password_hash)\n  RETURNING id, email, name, auth_provider\n),\nt AS (SELECT encode(gen_random_bytes(32), 'hex') AS token),\ns AS (\n  INSERT INTO sessions (user_id, token_hash)\n  SELECT u.id, encode(digest(t.token, 'sha256'), 'hex') FROM u CROSS JOIN t\n  RETURNING expires_at\n)\nSELECT u.id::text AS id, u.email, u.name, u.auth_provider, t.token,\n       to_char(s.expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS expires_at\nFROM u CROSS JOIN t CROSS JOIN s;",
+        "options": {
+          "queryReplacement": "={{ [String($json.body.email || ''), String($json.body.password || '')] }}"
+        }
+      },
+      "name": "Login + sesiune",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "a609adc4-137e-5c3a-802a-26c106471d17",
+      "position": [
+        640,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Un rând = succes (token + profil); zero rânduri = credențiale greșite\nconst row = $input.all().map(i => i.json).find(r => r && r.id && r.token);\nif (row) {\n  return [{ json: { statusCode: 200, body: {\n    token: row.token,\n    expires_at: row.expires_at,\n    user: { id: row.id, email: row.email, name: row.name, auth_provider: row.auth_provider }\n  } } }];\n}\nreturn [{ json: { statusCode: 401, body: { status: 'error', message: 'Email sau parolă incorectă' } } }];"
+      },
+      "name": "Rezultat login",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "de6134a5-52e7-5d25-83fa-3e8967b0bf7c",
+      "position": [
+        860,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "name": "Răspuns /auth/login",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "58a232e3-7847-524e-9f14-494e0c985e3d",
+      "position": [
+        1080,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "users",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook POST /users",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-users-post",
+      "id": "66101c43-1612-505b-b723-a55f19d2ae68",
+      "position": [
+        200,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook POST /users').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /users",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "f8cfefed-4206-5c5c-a411-ee8575c808ff",
+      "position": [
+        420,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Validare pe server (aplicația validează și ea, dar serverul nu are încredere în client)\nconst b = $json.body || {};\nconst email = String(b.email || '').trim().toLowerCase();\nconst name = String(b.name || '').trim();\nconst password = String(b.password || '');\nconst errors = [];\nif (!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) errors.push('Email invalid');\nif (password.length < 6) errors.push('Parola trebuie să aibă cel puțin 6 caractere');\nif (!name || name.length > 120) errors.push('Numele este obligatoriu (max. 120 caractere)');\nif (errors.length) {\n  return [{ json: { valid: false, statusCode: 400, body: { status: 'error', message: errors.join('. ') } } }];\n}\nreturn [{ json: { valid: true, email, name, password } }];"
+      },
+      "name": "Validare înregistrare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "fdd79c9f-a4b7-5c67-8c01-87bcebffe14d",
+      "position": [
+        640,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.valid }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Date valide /users",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "db17fd11-b658-5f69-af53-117127c68acf",
+      "position": [
+        860,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Conturile cu parolă se creează doar aici; Google trece prin /auth/google.\nWITH u AS (\n  INSERT INTO users (email, name, password_hash, auth_provider)\n  VALUES ($1, $2, crypt($3, gen_salt('bf')), 'email')\n  ON CONFLICT (email) DO NOTHING\n  RETURNING id, email, name, auth_provider\n),\nt AS (SELECT encode(gen_random_bytes(32), 'hex') AS token),\ns AS (\n  INSERT INTO sessions (user_id, token_hash)\n  SELECT u.id, encode(digest(t.token, 'sha256'), 'hex') FROM u CROSS JOIN t\n  RETURNING expires_at\n)\nSELECT u.id::text AS id, u.email, u.name, u.auth_provider, t.token,\n       to_char(s.expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS expires_at\nFROM u CROSS JOIN t CROSS JOIN s;",
+        "options": {
+          "queryReplacement": "={{ [$json.email, $json.name, $json.password] }}"
+        }
+      },
+      "name": "Creare cont + sesiune",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "48b6c2ce-2ebe-5c9a-b1d2-1906f2961456",
+      "position": [
+        1080,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Un rând = succes (token + profil); zero rânduri = email deja folosit\nconst row = $input.all().map(i => i.json).find(r => r && r.id && r.token);\nif (row) {\n  return [{ json: { statusCode: 200, body: {\n    token: row.token,\n    expires_at: row.expires_at,\n    user: { id: row.id, email: row.email, name: row.name, auth_provider: row.auth_provider }\n  } } }];\n}\nreturn [{ json: { statusCode: 409, body: { status: 'error', message: 'Există deja un cont cu acest email' } } }];"
+      },
+      "name": "Rezultat înregistrare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "b280d220-8532-583a-a721-8bc638b53a79",
+      "position": [
+        1300,
+        180
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "name": "Răspuns /users",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "8ba4c89c-93df-553d-88fc-ca5dbcfb6c46",
+      "position": [
+        1520,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "auth/google",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook POST /auth/google",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-auth-google-post",
+      "id": "a47a55f7-32f9-5e10-83af-ab8d15c5244a",
+      "position": [
+        200,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook POST /auth/google').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /auth/google",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "4cf96ab1-dfb9-5957-a0e3-e4cce7092902",
+      "position": [
+        420,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Serverul NU are încredere în email-ul trimis de aplicație: întreabă direct Clerk\n// cui aparține access token-ul (endpoint-ul OIDC /oauth/userinfo).\nconst body = $json.body || {};\nconst token = String(body.access_token || '');\nconst domain = String($env.CLERK_DOMAIN || '').replace(/^https?:\\/\\//, '').replace(/\\/+$/, '');\nconst fail = (statusCode, message) => [{ json: { ok: false, statusCode, body: { status: 'error', message } } }];\n\nif (!domain) return fail(500, 'CLERK_DOMAIN nu este configurat pe serverul n8n.');\nif (!token) return fail(400, 'Token Google lipsă.');\n\n// returnFullResponse + ignoreHttpStatusErrors: statusul vine în răspuns (în task runner-ul\n// n8n 2.x, eroarea aruncată nu conține codul HTTP).\nlet res;\ntry {\n  res = await this.helpers.httpRequest({\n    method: 'GET',\n    url: `https://${domain}/oauth/userinfo`,\n    headers: { Authorization: `Bearer ${token}` },\n    json: true,\n    timeout: 10000,\n    returnFullResponse: true,\n    ignoreHttpStatusErrors: true\n  });\n} catch (e) {\n  return fail(502, 'Nu s-a putut contacta Clerk pentru verificarea autentificării.');\n}\nconst status = Number(res.statusCode || 0);\nif (status === 401 || status === 403) return fail(401, 'Token Google invalid sau expirat.');\nif (status < 200 || status >= 300) return fail(502, `Clerk a răspuns cu HTTP ${status}.`);\nlet info = res.body;\nif (typeof info === 'string') { try { info = JSON.parse(info); } catch (_) { info = {}; } }\n\nconst email = String(info.email || '').trim().toLowerCase();\nif (!email) return fail(401, 'Contul Google nu are o adresă de email.');\nif (info.email_verified === false) return fail(401, 'Adresa de email Google nu este verificată.');\nconst name = String(info.name || [info.given_name, info.family_name].filter(Boolean).join(' ') || email.split('@')[0])\n  .trim().slice(0, 120);\nreturn [{ json: { ok: true, email, name } }];"
+      },
+      "name": "Verificare token Clerk",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "6237f5bf-0548-5bd4-930d-ea3f52fe3a4d",
+      "position": [
+        640,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Token Clerk valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "0f439e2d-13fa-5636-9414-1b8c9d2e9108",
+      "position": [
+        860,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Un email deja folosit de un cont cu parolă NU este preluat de Google (→ 409).\nWITH u AS (\n  INSERT INTO users (email, name, auth_provider)\n  VALUES ($1, $2, 'google')\n  ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name, last_login_at = NOW()\n    WHERE users.auth_provider = 'google'\n  RETURNING id, email, name, auth_provider\n),\nt AS (SELECT encode(gen_random_bytes(32), 'hex') AS token),\ns AS (\n  INSERT INTO sessions (user_id, token_hash)\n  SELECT u.id, encode(digest(t.token, 'sha256'), 'hex') FROM u CROSS JOIN t\n  RETURNING expires_at\n)\nSELECT u.id::text AS id, u.email, u.name, u.auth_provider, t.token,\n       to_char(s.expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS expires_at\nFROM u CROSS JOIN t CROSS JOIN s;",
+        "options": {
+          "queryReplacement": "={{ [$json.email, $json.name] }}"
+        }
+      },
+      "name": "Cont Google + sesiune",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "5a169917-1987-5b97-a3ec-c6ef7db41107",
+      "position": [
+        1080,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Un rând = succes (token + profil); zero rânduri = email folosit de un cont cu parolă\nconst row = $input.all().map(i => i.json).find(r => r && r.id && r.token);\nif (row) {\n  return [{ json: { statusCode: 200, body: {\n    token: row.token,\n    expires_at: row.expires_at,\n    user: { id: row.id, email: row.email, name: row.name, auth_provider: row.auth_provider }\n  } } }];\n}\nreturn [{ json: { statusCode: 409, body: { status: 'error', message: 'Acest email are deja un cont cu parolă. Autentifică-te cu email și parolă.' } } }];"
+      },
+      "name": "Rezultat Google",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "b826bd99-0b35-5f8c-a090-6161237baf61",
+      "position": [
+        1300,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "name": "Răspuns /auth/google",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "8db1d422-e1d8-54e1-827e-cafd636318b3",
+      "position": [
+        1520,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "auth/logout",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook POST /auth/logout",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-auth-logout-post",
+      "id": "cb1f5099-cac7-5711-b2c0-ed5722cda219",
+      "position": [
+        200,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook POST /auth/logout').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /auth/logout",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "a03838da-16dc-5c1f-ad33-fc4b254ed903",
+      "position": [
+        420,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE sessions SET revoked_at = NOW()\nWHERE token_hash = encode(digest($1, 'sha256'), 'hex') AND revoked_at IS NULL\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [($('Webhook POST /auth/logout').first().json.headers.authorization || '').replace(/^Bearer\\s+/i, '')] }}"
+        }
+      },
+      "name": "Revocare sesiune",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "b58cd879-7048-504a-bbbc-f1cd931178bb",
+      "position": [
+        640,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 200
+        }
+      },
+      "name": "Răspuns /auth/logout",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "c40235b9-4401-5dc7-a87c-548be297d712",
+      "position": [
+        860,
+        720
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "news",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook GET /news",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-news-get",
+      "id": "4665f549-55c8-586e-8bb0-ae96033398c4",
+      "position": [
+        200,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook GET /news').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /news",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "a77cc129-7aec-5604-bdb2-235eb7b2e8d5",
+      "position": [
+        420,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Sesiune validă = token cunoscut, nerevocat, neexpirat (utilizatorul șters → sesiunile dispar prin CASCADE)\nUPDATE sessions SET last_used_at = NOW()\nWHERE token_hash = encode(digest($1, 'sha256'), 'hex')\n  AND revoked_at IS NULL\n  AND expires_at > NOW()\nRETURNING user_id::text AS user_id;",
+        "options": {
+          "queryReplacement": "={{ [($('Webhook GET /news').first().json.headers.authorization || '').replace(/^Bearer\\s+/i, '')] }}"
+        }
+      },
+      "name": "Sesiune /news",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "5fabd762-1a07-5ac8-abdf-cc49346e0a72",
+      "position": [
+        640,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.user_id }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Sesiune validă /news",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "6af664dc-6d61-5a4b-9ca2-8099d373173e",
+      "position": [
+        860,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id::text AS id, a.title, a.source, a.image_url, a.summary, a.article_url,\n  a.read_time_minutes, a.category,\n  to_char(a.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS published_at,\n  a.full_content, a.ai_summary, a.ai_bullets, a.ai_tags, a.deep_dive,\n  (bm.user_id IS NOT NULL) AS is_bookmarked\nFROM articles a\nLEFT JOIN bookmarks bm ON bm.article_id = a.id AND bm.user_id = $1::uuid\nORDER BY a.published_at DESC\nLIMIT 500;",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id] }}"
+        }
+      },
+      "name": "Query articole",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "db57442d-f209-5970-98da-751969d3831b",
+      "position": [
+        1080,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const query = $('Webhook GET /news').first().json.query || {};\nconst allowed = String(query.categories || '').split(',').map(c => c.trim().toLowerCase()).filter(Boolean);\nconst exclude = new Set(String(query.exclude || '').split(',').map(id => id.trim()).filter(Boolean));\n\nconst list = $input.all()\n  .map(item => item.json)\n  .filter(a => a && a.id)                       // alwaysOutputData produce {} când tabela e goală\n  .filter(a => !exclude.has(a.id))\n  .filter(a => allowed.length === 0 || allowed.includes(String(a.category || '').toLowerCase()))\n  .slice(0, 50);\n\n// Un singur item cu lista: răspunsul este mereu un array JSON valid (și [] când nu sunt știri).\nreturn [{ json: { list } }];"
+      },
+      "name": "Filtrare categorii",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "17739580-67a3-52e3-802a-69fd4de7b48f",
+      "position": [
+        1300,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.list) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 200
+        }
+      },
+      "name": "Răspuns /news",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "53379631-db14-5791-9f3d-10dd50840788",
+      "position": [
+        1520,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "bookmarks",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook GET /bookmarks",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-bookmarks-get",
+      "id": "003ad8ff-a988-5907-8ee2-b3f64a62af14",
+      "position": [
+        200,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook GET /bookmarks').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /bookmarks (GET)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "fd3c3143-80f2-51a5-9e67-54dbd20101e6",
+      "position": [
+        420,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Sesiune validă = token cunoscut, nerevocat, neexpirat (utilizatorul șters → sesiunile dispar prin CASCADE)\nUPDATE sessions SET last_used_at = NOW()\nWHERE token_hash = encode(digest($1, 'sha256'), 'hex')\n  AND revoked_at IS NULL\n  AND expires_at > NOW()\nRETURNING user_id::text AS user_id;",
+        "options": {
+          "queryReplacement": "={{ [($('Webhook GET /bookmarks').first().json.headers.authorization || '').replace(/^Bearer\\s+/i, '')] }}"
+        }
+      },
+      "name": "Sesiune /bookmarks (GET)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "cfc48e29-6ae4-59f5-bb85-f2224ba2134e",
+      "position": [
+        640,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.user_id }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Sesiune validă /bookmarks (GET)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "46471f44-f8bd-5859-9f7d-33e9b26a26b9",
+      "position": [
+        860,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT a.id::text AS id, a.title, a.source, a.image_url, a.summary, a.article_url,\n  a.read_time_minutes, a.category,\n  to_char(a.published_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"') AS published_at,\n  a.full_content, a.ai_summary, a.ai_bullets, a.ai_tags, a.deep_dive,\n  TRUE AS is_bookmarked\nFROM bookmarks bm\nJOIN articles a ON a.id = bm.article_id\nWHERE bm.user_id = $1::uuid\nORDER BY bm.created_at DESC\nLIMIT 300;",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id] }}"
+        }
+      },
+      "name": "Query favorite",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "47e44a61-0a83-5527-8893-da3546c83352",
+      "position": [
+        1080,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { list: $input.all().map(i => i.json).filter(a => a && a.id) } }];"
+      },
+      "name": "Listă favorite",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "f175d186-8634-5b03-b782-cd7dc07d317b",
+      "position": [
+        1300,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.list) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 200
+        }
+      },
+      "name": "Răspuns /bookmarks (GET)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "21eb53ba-b38c-5128-8331-135937d05f10",
+      "position": [
+        1520,
+        1200
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "bookmarks",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook POST /bookmarks",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-bookmarks-post",
+      "id": "bceeab80-6bf4-5fd3-a2c2-8e74b2d0d7ff",
+      "position": [
+        200,
+        1440
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook POST /bookmarks').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /bookmarks (POST)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "2c5dd520-e98f-59c1-8a24-6680318ccfdf",
+      "position": [
+        420,
+        1440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Sesiune validă = token cunoscut, nerevocat, neexpirat (utilizatorul șters → sesiunile dispar prin CASCADE)\nUPDATE sessions SET last_used_at = NOW()\nWHERE token_hash = encode(digest($1, 'sha256'), 'hex')\n  AND revoked_at IS NULL\n  AND expires_at > NOW()\nRETURNING user_id::text AS user_id;",
+        "options": {
+          "queryReplacement": "={{ [($('Webhook POST /bookmarks').first().json.headers.authorization || '').replace(/^Bearer\\s+/i, '')] }}"
+        }
+      },
+      "name": "Sesiune /bookmarks (POST)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "3975e38c-a8ee-5067-a800-e87c68340f9d",
+      "position": [
+        640,
+        1440
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.user_id }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Sesiune validă /bookmarks (POST)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "99d4af61-0572-5e4f-852f-8664f653bcb3",
+      "position": [
+        860,
+        1440
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO bookmarks (user_id, article_id)\n  SELECT $1::uuid, $2::uuid WHERE $3::boolean\n  ON CONFLICT DO NOTHING\n  RETURNING 1\n), del AS (\n  DELETE FROM bookmarks\n  WHERE user_id = $1::uuid AND article_id = $2::uuid AND NOT $3::boolean\n  RETURNING 1\n)\nSELECT $3::boolean AS bookmarked;",
+        "options": {
+          "queryReplacement": "={{ [$json.user_id, String($('Webhook POST /bookmarks').first().json.body.article_id || ''), $('Webhook POST /bookmarks').first().json.body.bookmarked === true] }}"
+        }
+      },
+      "name": "Salvare favorit",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "2e164bc9-dc63-5dfd-8796-7fe65edaf6ab",
+      "position": [
+        1080,
+        1440
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 200
+        }
+      },
+      "name": "Răspuns /bookmarks (POST)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "277aad93-ce4e-589b-8ba6-67c1a4251bcc",
+      "position": [
+        1300,
+        1440
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "feedback",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook POST /feedback",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-feedback-post",
+      "id": "05bd7031-13c5-5bfd-82cf-ad5176276185",
+      "position": [
+        200,
+        1680
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook POST /feedback').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /feedback",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "ca34b38b-6940-546b-843b-1866ef4b5d7c",
+      "position": [
+        420,
+        1680
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Sesiune validă = token cunoscut, nerevocat, neexpirat (utilizatorul șters → sesiunile dispar prin CASCADE)\nUPDATE sessions SET last_used_at = NOW()\nWHERE token_hash = encode(digest($1, 'sha256'), 'hex')\n  AND revoked_at IS NULL\n  AND expires_at > NOW()\nRETURNING user_id::text AS user_id;",
+        "options": {
+          "queryReplacement": "={{ [($('Webhook POST /feedback').first().json.headers.authorization || '').replace(/^Bearer\\s+/i, '')] }}"
+        }
+      },
+      "name": "Sesiune /feedback",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "e6ab7b2b-be77-55a7-a035-857443ab5cd6",
+      "position": [
+        640,
+        1680
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.user_id }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Sesiune validă /feedback",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "59aa0632-99d6-5fc8-b3c7-8d804e85799e",
+      "position": [
+        860,
+        1680
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO article_feedback (article_id, is_positive, user_id)\nVALUES ($1::uuid, $2::boolean, $3::uuid)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [String($('Webhook POST /feedback').first().json.body.article_id || ''), $('Webhook POST /feedback').first().json.body.is_positive === true, $json.user_id] }}"
+        }
+      },
+      "name": "Insert Feedback",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "id": "87d61efc-1de3-503f-903f-cebe659451eb",
+      "position": [
+        1080,
+        1680
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\" }",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 200
+        }
+      },
+      "name": "Răspuns /feedback",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "d8e6f302-2788-587a-b31e-914d66753cf4",
+      "position": [
+        1300,
+        1680
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "deep-dive",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook POST /deep-dive",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-deep-dive-post",
+      "id": "19b93ebc-f770-5f9e-98b2-bd64600979ab",
+      "position": [
+        200,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook POST /deep-dive').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /deep-dive",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "cd5c94d7-182d-5e71-94bd-da7c4c193a2c",
+      "position": [
+        420,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- Sesiune validă = token cunoscut, nerevocat, neexpirat (utilizatorul șters → sesiunile dispar prin CASCADE)\nUPDATE sessions SET last_used_at = NOW()\nWHERE token_hash = encode(digest($1, 'sha256'), 'hex')\n  AND revoked_at IS NULL\n  AND expires_at > NOW()\nRETURNING user_id::text AS user_id;",
+        "options": {
+          "queryReplacement": "={{ [($('Webhook POST /deep-dive').first().json.headers.authorization || '').replace(/^Bearer\\s+/i, '')] }}"
+        }
+      },
+      "name": "Sesiune /deep-dive",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "d94467ac-2083-5e8d-bdc9-0d3d7501ac38",
+      "position": [
+        640,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ !!$json.user_id }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Sesiune validă /deep-dive",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "e8ff0d10-f8c4-5df4-b0bf-2d6ec970d9d1",
+      "position": [
+        860,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id::text AS id, title, summary, full_content, ai_summary, deep_dive\nFROM articles WHERE id::text = lower($1) LIMIT 1;",
+        "options": {
+          "queryReplacement": "={{ [String($('Webhook POST /deep-dive').first().json.body.article_id || '')] }}"
+        }
+      },
+      "name": "Citește articol",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "a843d6f7-8543-5e63-9b07-5bcf485ca0c7",
+      "position": [
+        1080,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// „Aprofundează subiectul”: analiză generată o singură dată per articol, apoi servită din cache.\nconst row = $input.first().json || {};\nif (!row.id) return [{ json: { statusCode: 404, save: false, body: { status: 'error', message: 'Articolul nu există.' } } }];\nif (row.deep_dive) return [{ json: { statusCode: 200, save: false, body: { article_id: row.id, deep_dive: row.deep_dive } } }];\n\nconst key = $env.GEMINI_API_KEY || '';\nif (!key) return [{ json: { statusCode: 503, save: false, body: { status: 'error', message: 'Analiza AI nu este configurată pe server.' } } }];\n\nconst content = String(row.full_content || row.ai_summary || row.summary || '').slice(0, 10000);\nconst prompt = `Ești un jurnalist analist. Pentru articolul de mai jos scrie în limba ROMÂNĂ o aprofundare de 150-220 de cuvinte, cu exact aceste trei secțiuni, fiecare începând pe un rând nou cu titlul urmat de două puncte:\nContext:\nDe ce contează:\nCe urmează:\nFolosește doar informații din articol și cunoștințe generale sigure. Nu inventa cifre, nume sau citate. Răspunde doar cu textul, fără markdown.\n\nTitlu: ${row.title}\n\nArticol:\n${content}`;\n\ntry {\n  const response = await this.helpers.httpRequest({\n    method: 'POST',\n    url: `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${key}`,\n    headers: { 'Content-Type': 'application/json' },\n    body: JSON.stringify({\n      contents: [{ parts: [{ text: prompt }] }],\n      generationConfig: { temperature: 0.4, maxOutputTokens: 700 }\n    }),\n    json: false,\n    timeout: 25000\n  });\n  const data = typeof response === 'string' ? JSON.parse(response) : response;\n  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text?.replace(/\\*\\*/g, '').trim();\n  if (!text) throw new Error('Răspuns AI gol');\n  return [{ json: { statusCode: 200, save: true, body: { article_id: row.id, deep_dive: text } } }];\n} catch (e) {\n  return [{ json: { statusCode: 502, save: false, body: { status: 'error', message: 'Serviciul AI nu a răspuns. Încearcă din nou.' } } }];\n}"
+      },
+      "name": "Deep-dive (Gemini)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "fd2442ed-e89c-5433-87ce-0c4fbd662694",
+      "position": [
+        1300,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "name": "Răspuns /deep-dive",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "084005ea-24c6-54b7-8a8c-c8d9ab89d1ff",
+      "position": [
+        1520,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE articles SET deep_dive = $2\nWHERE id::text = $1 AND $3::boolean AND $2 <> '';",
+        "options": {
+          "queryReplacement": "={{ [$('Deep-dive (Gemini)').first().json.body.article_id || '', $('Deep-dive (Gemini)').first().json.body.deep_dive || '', $('Deep-dive (Gemini)').first().json.save === true] }}"
+        }
+      },
+      "name": "Salvare deep-dive",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "id": "8bc437c2-9655-57f8-9acb-c3fbdf3e3675",
+      "position": [
+        1740,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "categories",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook GET /categories",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-categories-get",
+      "id": "9a28cef0-cb6e-56f5-a13c-4bbcea2169a8",
+      "position": [
+        200,
+        2160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook GET /categories').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /categories",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "39e9fb56-9f7b-5f51-92f9-779019bbc01a",
+      "position": [
+        420,
+        2160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"categories\": [\"tech\", \"sport\", \"economy\", \"politics\", \"science\", \"local\", \"health\", \"entertainment\", \"world\"] }",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 200
+        }
+      },
+      "name": "Răspuns /categories",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "813ae932-29eb-5aab-aa6c-8aeff175ac06",
+      "position": [
+        640,
+        2160
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook POST /auth/login": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /auth/login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /auth/login": {
+      "main": [
+        [
+          {
+            "node": "Login + sesiune",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Login + sesiune": {
+      "main": [
+        [
+          {
+            "node": "Rezultat login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rezultat login": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /auth/login",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook POST /users": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /users": {
+      "main": [
+        [
+          {
+            "node": "Validare înregistrare",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validare înregistrare": {
+      "main": [
+        [
+          {
+            "node": "Date valide /users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Date valide /users": {
+      "main": [
+        [
+          {
+            "node": "Creare cont + sesiune",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns /users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Creare cont + sesiune": {
+      "main": [
+        [
+          {
+            "node": "Rezultat înregistrare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rezultat înregistrare": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /users",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook POST /auth/google": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /auth/google",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /auth/google": {
+      "main": [
+        [
+          {
+            "node": "Verificare token Clerk",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificare token Clerk": {
+      "main": [
+        [
+          {
+            "node": "Token Clerk valid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Token Clerk valid": {
+      "main": [
+        [
+          {
+            "node": "Cont Google + sesiune",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns /auth/google",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cont Google + sesiune": {
+      "main": [
+        [
+          {
+            "node": "Rezultat Google",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rezultat Google": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /auth/google",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook POST /auth/logout": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /auth/logout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /auth/logout": {
+      "main": [
+        [
+          {
+            "node": "Revocare sesiune",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Revocare sesiune": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /auth/logout",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook GET /news": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /news",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /news": {
+      "main": [
+        [
+          {
+            "node": "Sesiune /news",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune /news": {
+      "main": [
+        [
+          {
+            "node": "Sesiune validă /news",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune validă /news": {
+      "main": [
+        [
+          {
+            "node": "Query articole",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 401 sesiune invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query articole": {
+      "main": [
+        [
+          {
+            "node": "Filtrare categorii",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filtrare categorii": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /news",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook GET /bookmarks": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /bookmarks (GET)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /bookmarks (GET)": {
+      "main": [
+        [
+          {
+            "node": "Sesiune /bookmarks (GET)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune /bookmarks (GET)": {
+      "main": [
+        [
+          {
+            "node": "Sesiune validă /bookmarks (GET)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune validă /bookmarks (GET)": {
+      "main": [
+        [
+          {
+            "node": "Query favorite",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 401 sesiune invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Query favorite": {
+      "main": [
+        [
+          {
+            "node": "Listă favorite",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Listă favorite": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /bookmarks (GET)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook POST /bookmarks": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /bookmarks (POST)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /bookmarks (POST)": {
+      "main": [
+        [
+          {
+            "node": "Sesiune /bookmarks (POST)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune /bookmarks (POST)": {
+      "main": [
+        [
+          {
+            "node": "Sesiune validă /bookmarks (POST)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune validă /bookmarks (POST)": {
+      "main": [
+        [
+          {
+            "node": "Salvare favorit",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 401 sesiune invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvare favorit": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /bookmarks (POST)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook POST /feedback": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /feedback": {
+      "main": [
+        [
+          {
+            "node": "Sesiune /feedback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune /feedback": {
+      "main": [
+        [
+          {
+            "node": "Sesiune validă /feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune validă /feedback": {
+      "main": [
+        [
+          {
+            "node": "Insert Feedback",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 401 sesiune invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert Feedback": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /feedback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook POST /deep-dive": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /deep-dive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /deep-dive": {
+      "main": [
+        [
+          {
+            "node": "Sesiune /deep-dive",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune /deep-dive": {
+      "main": [
+        [
+          {
+            "node": "Sesiune validă /deep-dive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune validă /deep-dive": {
+      "main": [
+        [
+          {
+            "node": "Citește articol",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 401 sesiune invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Citește articol": {
+      "main": [
+        [
+          {
+            "node": "Deep-dive (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Deep-dive (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /deep-dive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Răspuns /deep-dive": {
+      "main": [
+        [
+          {
+            "node": "Salvare deep-dive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook GET /categories": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /categories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /categories": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /categories",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 cheie invalidă",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

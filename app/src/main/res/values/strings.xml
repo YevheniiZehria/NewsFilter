@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">NewsFilter</string>
+    <string name="tab_for_you">Pentru tine</string>
+    <string name="tab_bookmarks">Salvate</string>
+    <string name="tab_settings">Setări</string>
+    <string name="read_time_format">%d min de lectură</string>
+    <string name="channel_name_news">Pachetul tău zilnic de știri</string>
+    <string name="channel_desc_news">Notificare zilnică cu știrile selectate pentru tine.</string>
+    <string name="channel_name_audio">Redare audio știri</string>
+    <string name="channel_desc_audio">Controale media pentru ascultarea pachetului de știri în fundal.</string>
+</resources>
+

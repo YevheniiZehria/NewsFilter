@@ -1,0 +1,48 @@
+# Gradle
+.gradle/
+build/
+**/build/
+!src/**/build/
+
+# Kotlin
+.kotlin/
+
+# Local configuration (SDK path, secrets)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+captures/
+.externalNativeBuild/
+.cxx/
+.navigation/
+
+# Generated / outputs
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+output-metadata.json
+
+# Keystores
+*.jks
+*.keystore
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Keep the Gradle wrapper jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Environment secrets (backend/.env etc.)
+.env
+**/.env
+!.env.example

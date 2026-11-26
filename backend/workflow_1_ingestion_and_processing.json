@@ -1,0 +1,719 @@
+{
+  "name": "NewsFilter - Ingestion & Processing",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "1",
+      "name": "Schedule Trigger (30 min)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        560
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Rulare Manuala",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://feeds.bbci.co.uk/news/technology/rss.xml",
+        "options": {}
+      },
+      "id": "rss-1",
+      "name": "RSS Tech News",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        160
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "https://feeds.bbci.co.uk/news/business/rss.xml",
+        "options": {}
+      },
+      "id": "rss-2",
+      "name": "RSS Economy News",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        320
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "https://feeds.bbci.co.uk/sport/rss.xml",
+        "options": {}
+      },
+      "id": "rss-3",
+      "name": "RSS Sport News",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        480
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+        "options": {}
+      },
+      "id": "rss-4",
+      "name": "RSS Science News",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        640
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "https://feeds.bbci.co.uk/news/health/rss.xml",
+        "options": {}
+      },
+      "id": "rss-5",
+      "name": "RSS Health News",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        800
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "url": "https://feeds.bbci.co.uk/news/world/rss.xml",
+        "options": {}
+      },
+      "id": "rss-6",
+      "name": "RSS World News",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        960
+      ],
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "inputs": {
+          "inputsUi": {
+            "inputs": [
+              {
+                "node": "RSS Tech News"
+              },
+              {
+                "node": "RSS Economy News"
+              },
+              {
+                "node": "RSS Sport News"
+              },
+              {
+                "node": "RSS Science News"
+              },
+              {
+                "node": "RSS Health News"
+              },
+              {
+                "node": "RSS World News"
+              }
+            ]
+          }
+        }
+      },
+      "id": "merge-feeds",
+      "name": "Unire Feed-uri",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        720,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalizare si clasificare articole RSS\nconst categoryMap = {\n  'rss-1': 'tech',\n  'rss-2': 'economy',\n  'rss-3': 'sport',\n  'rss-4': 'science',\n  'rss-5': 'health',\n  'rss-6': 'world'\n};\n\nconst techKeywords = ['tech', 'ai', 'software', 'hardware', 'cyber', 'digital', 'robot', 'code', 'app', 'computer', 'internet', 'data', 'cloud', 'hack'];\nconst econKeywords = ['economy', 'market', 'stock', 'trade', 'gdp', 'inflation', 'bank', 'finance', 'business', 'invest', 'money', 'price', 'cost', 'revenue'];\nconst sportKeywords = ['sport', 'football', 'soccer', 'basketball', 'tennis', 'cricket', 'rugby', 'olympics', 'champion', 'league', 'match', 'player', 'team', 'win'];\nconst sciKeywords = ['science', 'research', 'study', 'climate', 'environment', 'space', 'nasa', 'discovery', 'planet', 'genome', 'vaccine', 'physics', 'biology'];\nconst healthKeywords = ['health', 'medical', 'hospital', 'disease', 'virus', 'cancer', 'drug', 'treatment', 'doctor', 'patient', 'mental', 'diet', 'exercise'];\n\nfunction guessCategory(title, description) {\n  const text = ((title || '') + ' ' + (description || '')).toLowerCase();\n  if (techKeywords.some(k => text.includes(k))) return 'tech';\n  if (econKeywords.some(k => text.includes(k))) return 'economy';\n  if (sportKeywords.some(k => text.includes(k))) return 'sport';\n  if (sciKeywords.some(k => text.includes(k))) return 'science';\n  if (healthKeywords.some(k => text.includes(k))) return 'health';\n  return 'world';\n}\n\nfunction estimateReadTime(text) {\n  if (!text) return 2;\n  const wordCount = text.trim().split(/\\s+/).length;\n  return Math.max(1, Math.round(wordCount / 200));\n}\n\nconst seen = new Set();\nconst results = [];\n\nfor (const item of $input.all()) {\n  const data = item.json;\n  const url = data.link || data.url || data.guid || '';\n  if (!url || seen.has(url)) continue;\n  seen.add(url);\n\n  const title = (data.title || '').trim();\n  const description = (data.contentSnippet || data.content || data.description || data.summary || '').replace(/<[^>]+>/g, '').trim();\n  const pubDate = data.pubDate || data.isoDate || data.published || null;\n  const category = guessCategory(title, description);\n  const readTime = estimateReadTime(description);\n\n  results.push({\n    json: {\n      title,\n      source: 'BBC News',\n      image_url: data.enclosure?.url || data['media:thumbnail']?.['$']?.url || null,\n      summary: description.slice(0, 500),\n      article_url: url,\n      read_time_minutes: readTime,\n      category,\n      published_at: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),\n      full_content: null,\n      ai_summary: null,\n      ai_bullets: null,\n      ai_tags: null\n    }\n  });\n}\n\nreturn results;\n"
+      },
+      "id": "normalize",
+      "name": "Normalizare & Clasificare",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT article_url, full_content, ai_summary, ai_bullets, ai_tags\nFROM articles\nWHERE created_at > NOW() - INTERVAL '14 days'",
+        "options": {}
+      },
+      "id": "read-existing",
+      "name": "Citeste articole existente",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1200,
+        560
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "executeOnce": true,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Articolele noi vin din „Normalizare & Clasificare”; nodul Postgres anterior întoarce doar\n// rândurile existente (full_content / rezumate AI deja calculate), pe care le refolosim.\nconst dbMap = new Map();\nfor (const item of $input.all()) {\n  const d = item.json || {};\n  if (d.article_url) dbMap.set(d.article_url, d);\n}\n\nconst BBC_IMAGE_PLACEHOLDER = 'https://news.bbcimg.co.uk/nol/shared/img/bbc_news_120x60.gif';\nconst fixImageUrl = (url) => (url && url.startsWith('http')) ? url : BBC_IMAGE_PLACEHOLDER;\n\nreturn $('Normalizare & Clasificare').all().map(({ json: article }) => {\n  const existing = dbMap.get(article.article_url) || {};\n  return {\n    json: {\n      ...article,\n      image_url: fixImageUrl(article.image_url),\n      full_content: existing.full_content || article.full_content || null,\n      ai_summary: existing.ai_summary || article.ai_summary || null,\n      ai_bullets: existing.ai_bullets || null,\n      ai_tags: existing.ai_tags || null\n    }\n  };\n});"
+      },
+      "id": "enrich-images",
+      "name": "Imbogatire Imagini",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        760
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extragere text complet din pagina articolului BBC\nconst CONCURRENCY = 5;\nconst MAX_FETCHES = 150;\nconst TIMEOUT_MS = 10000;\n\nfunction extractBBCContent(html) {\n  const stripHtml = (s) => s\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')\n    .replace(/&quot;/g, '\"').replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/&#39;|&apos;/g, \"'\")\n    .replace(/\\s+/g, ' ').trim();\n\n  const blocks = [];\n  const articleMatch = html.match(/<article[\\s\\S]*?<\\/article>/i);\n  const scope = articleMatch ? articleMatch[0] : html;\n  const paragraphs = scope.match(/<p\\b[^>]*>[\\s\\S]*?<\\/p>/gi) || [];\n  for (const p of paragraphs) {\n    const text = stripHtml(p);\n    if (text.length > 40) blocks.push(text);\n  }\n  if (blocks.length === 0) {\n    const divs = scope.match(/<div[^>]*data-component=\"text-block\"[^>]*>[\\s\\S]*?<\\/div>/gi) || [];\n    for (const d of divs) {\n      const text = stripHtml(d);\n      if (text.length > 40) blocks.push(text);\n    }\n  }\n  if (blocks.length === 0) return null;\n  return blocks.join('\\n\\n').slice(0, 15000);\n}\n\nasync function fetchContent(article) {\n  if (!this.helpers || typeof this.helpers.httpRequest !== 'function') return;\n  try {\n    const html = await this.helpers.httpRequest({\n      method: 'GET',\n      url: article.article_url,\n      timeout: TIMEOUT_MS,\n      headers: {\n        'User-Agent': 'Mozilla/5.0 (compatible; NewsFilterBot/2.0)',\n        Accept: 'text/html,application/xhtml+xml'\n      },\n      json: false\n    });\n    if (typeof html === 'string') {\n      const content = extractBBCContent(html);\n      if (content) article.full_content = content;\n    }\n  } catch (e) {\n    // timeout / blocat - continuam fara\n  }\n}\n\nconst articles = $input.all().map(i => ({ ...i.json }));\nconst needsFetch = articles.filter(a => !a.full_content).slice(0, MAX_FETCHES);\nconst fetchContentBound = fetchContent.bind(this);\n\nfor (let i = 0; i < needsFetch.length; i += CONCURRENCY) {\n  const batch = needsFetch.slice(i, i + CONCURRENCY);\n  await Promise.all(batch.map(a => fetchContentBound(a)));\n}\n\nreturn articles.map(json => ({ json }));\n"
+      },
+      "id": "scrape_full_text",
+      "name": "Extragere Text Complet (Scraping)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1460,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Smart Digest cu Gemini Flash Lite: rezumat + 2-3 idei cheie (TL;DR) + etichete, într-un singur apel JSON.\nconst GEMINI_API_KEY = $env.GEMINI_API_KEY || '';\nconst GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-lite-latest:generateContent?key=${GEMINI_API_KEY}`;\nconst CONCURRENCY = 3;\nconst MAX_PER_RUN = 50;\n\nconst articles = $input.all().map(i => ({ ...i.json }));\nif (!GEMINI_API_KEY) return articles.map(json => ({ json }));\n\nconst hasDigest = (a) => a.ai_summary && Array.isArray(a.ai_bullets) && a.ai_bullets.length > 0;\nconst toProcess = articles.filter(a => a.full_content && !hasDigest(a)).slice(0, MAX_PER_RUN);\n\nconst cleanList = (value, max, maxLen) => (Array.isArray(value) ? value : [])\n  .map(v => String(v || '').replace(/^[-•*\\s]+/, '').trim())\n  .filter(v => v.length > 0)\n  .map(v => v.slice(0, maxLen))\n  .slice(0, max);\n\nasync function digestArticle(article) {\n  const text = article.full_content.slice(0, 8000);\n  const prompt = `Esti redactor de stiri. Analizeaza articolul si raspunde DOAR cu un obiect JSON valid, in limba ROMANA, cu structura:\n{\"summary\": \"rezumat de 3-4 propozitii\", \"bullets\": [\"idee cheie 1\", \"idee cheie 2\", \"idee cheie 3\"], \"tags\": [\"eticheta 1\", \"eticheta 2\"]}\nReguli: \"bullets\" are 2-3 elemente, fiecare sub 20 de cuvinte, cu informatia esentiala; \"tags\" are 2-4 etichete scurte (1-2 cuvinte, litere mici) despre subiecte, persoane, locuri sau organizatii. Nu inventa informatii.\n\nTitlu: ${article.title}\n\nContinut:\n${text}`;\n  try {\n    const response = await this.helpers.httpRequest({\n      method: 'POST',\n      url: GEMINI_URL,\n      headers: { 'Content-Type': 'application/json' },\n      body: JSON.stringify({\n        contents: [{ parts: [{ text: prompt }] }],\n        generationConfig: { temperature: 0.3, maxOutputTokens: 800, responseMimeType: 'application/json' }\n      }),\n      json: false,\n      timeout: 20000\n    });\n    const data = typeof response === 'string' ? JSON.parse(response) : response;\n    const raw = (data?.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/^```(?:json)?|```$/g, '').trim();\n    const parsed = JSON.parse(raw);\n    const summary = String(parsed.summary || '').trim();\n    const bullets = cleanList(parsed.bullets, 3, 220);\n    const tags = cleanList(parsed.tags, 4, 30).map(t => t.toLowerCase());\n    if (summary) article.ai_summary = summary;\n    if (bullets.length >= 2) article.ai_bullets = bullets;\n    if (tags.length > 0) article.ai_tags = tags;\n  } catch (e) {\n    // eroare API / JSON invalid - articolul rămâne cu rezumatul anterior (sau fără)\n  }\n}\n\nconst digestBound = digestArticle.bind(this);\nfor (let i = 0; i < toProcess.length; i += CONCURRENCY) {\n  await Promise.all(toProcess.slice(i, i + CONCURRENCY).map(a => digestBound(a)));\n}\n\nconst updated = new Map(toProcess.map(a => [a.article_url, a]));\nreturn articles.map(a => ({ json: updated.get(a.article_url) || a }));"
+      },
+      "id": "ai_summarize",
+      "name": "Rezumare AI (Gemini)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO articles (title, source, image_url, summary, article_url, read_time_minutes, category, published_at, full_content, ai_summary, ai_bullets, ai_tags)\nVALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $9, $10, $11::jsonb, $12::jsonb)\nON CONFLICT (article_url) DO UPDATE SET\n  title = EXCLUDED.title,\n  image_url = COALESCE(EXCLUDED.image_url, articles.image_url),\n  summary = EXCLUDED.summary,\n  read_time_minutes = EXCLUDED.read_time_minutes,\n  category = EXCLUDED.category,\n  full_content = COALESCE(EXCLUDED.full_content, articles.full_content),\n  ai_summary = COALESCE(EXCLUDED.ai_summary, articles.ai_summary),\n  ai_bullets = COALESCE(EXCLUDED.ai_bullets, articles.ai_bullets),\n  ai_tags = COALESCE(EXCLUDED.ai_tags, articles.ai_tags)",
+        "options": {
+          "queryBatching": "independently",
+          "queryReplacement": "={{ [$json.title, $json.source, $json.image_url, $json.summary, $json.article_url, $json.read_time_minutes, $json.category, $json.published_at, $json.full_content, $json.ai_summary, $json.ai_bullets ? JSON.stringify($json.ai_bullets) : null, $json.ai_tags ? JSON.stringify($json.ai_tags) : null] }}"
+        }
+      },
+      "id": "pg-insert",
+      "name": "PostgreSQL Insert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1940,
+        560
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "refresh",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "name": "Webhook POST /refresh",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "newsfilter-refresh-post",
+      "id": "8f68a547-84d3-5bc4-a528-45f595218882",
+      "position": [
+        240,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ ($('Webhook POST /refresh').first().json.headers['x-api-key'] || '') === $env.N8N_API_KEY }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cheie API /refresh",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "a9f4e94c-8c5a-59f1-849d-d797fcef410c",
+      "position": [
+        240,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH s AS (\n  UPDATE sessions SET last_used_at = NOW()\n  WHERE token_hash = encode(digest($1, 'sha256'), 'hex') AND revoked_at IS NULL AND expires_at > NOW()\n  RETURNING user_id\n), recent AS (\n  SELECT 1 FROM refresh_requests WHERE requested_at > NOW() - INTERVAL '3 minutes' LIMIT 1\n), ins AS (\n  INSERT INTO refresh_requests (user_id)\n  SELECT user_id FROM s WHERE NOT EXISTS (SELECT 1 FROM recent)\n  RETURNING id\n)\nSELECT (SELECT user_id::text FROM s) AS user_id, (SELECT count(*) FROM ins) > 0 AS accepted;",
+        "options": {
+          "queryReplacement": "={{ [($('Webhook POST /refresh').first().json.headers.authorization || '').replace(/^Bearer\\s+/i, '')] }}"
+        }
+      },
+      "name": "Sesiune + limită /refresh",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "credentials": {
+        "postgres": {
+          "id": "c4NxYO2scpcaPSwt",
+          "name": "Postgres account"
+        }
+      },
+      "alwaysOutputData": true,
+      "id": "ee02442f-3646-5aaf-8a21-eca25ee2d5e1",
+      "position": [
+        480,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json || {};\nif (!r.user_id) return [{ json: { accepted: false, statusCode: 401, body: { status: 'error', message: 'Sesiune invalidă sau expirată' } } }];\nif (!r.accepted) return [{ json: { accepted: false, statusCode: 429, body: { status: 'error', message: 'O actualizare a fost pornită recent. Încearcă din nou peste câteva minute.' } } }];\nreturn [{ json: { accepted: true, statusCode: 202, body: { status: 'started', message: 'Actualizarea surselor a pornit.' } } }];"
+      },
+      "name": "Rezultat /refresh",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "id": "7ab80050-8533-5691-b766-4965ac0e10fa",
+      "position": [
+        720,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": "={{ $json.statusCode }}"
+        }
+      },
+      "name": "Răspuns /refresh",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "5a751b7d-fa7f-50b4-903a-3b5afe09a498",
+      "position": [
+        960,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.accepted }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Cerere acceptată?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "id": "e215e43c-df62-52c2-af78-8d97a3381956",
+      "position": [
+        1200,
+        1160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"error\", \"message\": \"Cheie API invalidă\" }",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              }
+            ]
+          },
+          "responseCode": 403
+        }
+      },
+      "name": "Răspuns 403 /refresh",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "id": "a7c4d775-fef2-5fe9-8a1c-3deb998d5bcb",
+      "position": [
+        480,
+        1360
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (30 min)": {
+      "main": [
+        [
+          {
+            "node": "RSS Tech News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Economy News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Sport News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Science News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Health News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS World News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rulare Manuala": {
+      "main": [
+        [
+          {
+            "node": "RSS Tech News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Economy News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Sport News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Science News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Health News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS World News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Tech News": {
+      "main": [
+        [
+          {
+            "node": "Unire Feed-uri",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Economy News": {
+      "main": [
+        [
+          {
+            "node": "Unire Feed-uri",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "RSS Sport News": {
+      "main": [
+        [
+          {
+            "node": "Unire Feed-uri",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "RSS Science News": {
+      "main": [
+        [
+          {
+            "node": "Unire Feed-uri",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "RSS Health News": {
+      "main": [
+        [
+          {
+            "node": "Unire Feed-uri",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "RSS World News": {
+      "main": [
+        [
+          {
+            "node": "Unire Feed-uri",
+            "type": "main",
+            "index": 5
+          }
+        ]
+      ]
+    },
+    "Unire Feed-uri": {
+      "main": [
+        [
+          {
+            "node": "Normalizare & Clasificare",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalizare & Clasificare": {
+      "main": [
+        [
+          {
+            "node": "Citeste articole existente",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Citeste articole existente": {
+      "main": [
+        [
+          {
+            "node": "Imbogatire Imagini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Imbogatire Imagini": {
+      "main": [
+        [
+          {
+            "node": "Extragere Text Complet (Scraping)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extragere Text Complet (Scraping)": {
+      "main": [
+        [
+          {
+            "node": "Rezumare AI (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rezumare AI (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "PostgreSQL Insert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook POST /refresh": {
+      "main": [
+        [
+          {
+            "node": "Cheie API /refresh",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cheie API /refresh": {
+      "main": [
+        [
+          {
+            "node": "Sesiune + limită /refresh",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Răspuns 403 /refresh",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sesiune + limită /refresh": {
+      "main": [
+        [
+          {
+            "node": "Rezultat /refresh",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rezultat /refresh": {
+      "main": [
+        [
+          {
+            "node": "Răspuns /refresh",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Răspuns /refresh": {
+      "main": [
+        [
+          {
+            "node": "Cerere acceptată?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cerere acceptată?": {
+      "main": [
+        [
+          {
+            "node": "RSS Tech News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Economy News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Sport News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Science News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS Health News",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "RSS World News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
