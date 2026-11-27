@@ -10,3 +10,11 @@ sdk.dir=/path/to/Android/sdk
 # Opțional: cheie Gemini (gratuită, https://aistudio.google.com/apikey) pentru rezumatele AI
 # ale știrilor locale generate pe dispozitiv. Fără ea se folosește rezumatul extractiv offline.
 # GEMINI_API_KEY=
+
+# Voce „Narator" pentru citirea rezumatelor (opțional, fără secrete).
+# Numele exacte ale vocilor instalate apar în Logcat (tag NewsFilter, "Available TTS voices")
+# când pornește player-ul audio; ex. ro-ro-x-vfv-local. Gol = vocea implicită a motorului TTS.
+narrator.voiceName=
+narrator.pitch=0.8
+narrator.rate=0.9
+narrator.pauseMs=700

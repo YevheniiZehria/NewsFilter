@@ -23,5 +23,7 @@ class AudioPlayerViewModel @Inject constructor(
 
     fun cycleSpeed() = audioPlayer.cycleSpeed()
 
+    fun cycleVoice() = audioPlayer.cycleVoice()
+
     fun stop() = audioPlayer.stop()
 }

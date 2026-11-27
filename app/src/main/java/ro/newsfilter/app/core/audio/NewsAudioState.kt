@@ -11,6 +11,7 @@ import ro.newsfilter.app.domain.model.NewsArticle
  * @property playlist Lista de articole din pachetul curent
  * @property currentIndex Indexul articolului redat în prezent
  * @property speechRate Viteza de redare (0.85x, 1.0x, 1.25x, 1.5x)
+ * @property voice Presetul de voce (Standard / Narator)
  * @property error Mesaj de eroare, dacă TTS nu este disponibil pe dispozitiv
  */
 data class NewsAudioState(
@@ -20,6 +21,7 @@ data class NewsAudioState(
     val playlist: List<NewsArticle> = emptyList(),
     val currentIndex: Int = 0,
     val speechRate: Float = 1.0f,
+    val voice: NarratorVoice = NarratorVoice.STANDARD,
     val error: String? = null
 ) {
     val currentArticle: NewsArticle?

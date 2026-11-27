@@ -9,10 +9,13 @@ import android.os.Build
 import android.os.IBinder
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dagger.hilt.android.AndroidEntryPoint
+import ro.newsfilter.app.BuildConfig
 import ro.newsfilter.app.MainActivity
 import ro.newsfilter.app.NewsFilterApp
 import ro.newsfilter.app.R
@@ -34,6 +37,8 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
     private var isTtsReady = false
     private var pendingSpeak = false
+    private var defaultVoice: Voice? = null
+    private var narratorVoice: Voice? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -62,8 +67,8 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
             ACTION_PREVIOUS -> {
                 audioPlayer.previous()
             }
-            ACTION_SET_SPEED -> {
-                tts?.setSpeechRate(audioPlayer.state.value.speechRate)
+            ACTION_SET_SPEED, ACTION_SET_VOICE -> {
+                // Setările se aplică în speakCurrentArticle(); repornim articolul curent dacă rulează.
                 if (audioPlayer.state.value.isPlaying && isTtsReady) {
                     speakCurrentArticle()
                 }
@@ -99,6 +104,19 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
             else -> engine.language = Locale.US
         }
 
+        // Vocile instalate pentru limba activă: de aici se alege `narrator.voiceName` din local.properties.
+        val locale = engine.voice?.locale ?: Locale.getDefault()
+        Log.d("NewsFilter", "Available TTS voices: ${engine.voices?.filter { it.locale.language == locale.language }?.map { it.name }}")
+
+        defaultVoice = engine.voice
+        val narratorName = BuildConfig.NARRATOR_VOICE_NAME
+        if (narratorName.isNotBlank()) {
+            narratorVoice = engine.voices?.firstOrNull { it.name == narratorName }
+            if (narratorVoice == null) {
+                Log.w("NewsFilter", "Vocea narator „$narratorName” nu este instalată; se folosește vocea implicită.")
+            }
+        }
+
         engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
                 audioPlayer.onPlaybackStateChanged(isPlaying = true, isPreparing = false)
@@ -106,6 +124,8 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
             }
 
             override fun onDone(utteranceId: String?) {
+                // Segmentele intermediare ale presetului Narator (titlu, pauză) nu încheie articolul.
+                if (utteranceId?.contains(SEGMENT_SEPARATOR) == true) return
                 val hasMore = audioPlayer.onArticleCompleted()
                 if (hasMore) {
                     speakCurrentArticle()
@@ -138,10 +158,8 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
         val article = state.currentArticle ?: return
         val engine = tts ?: return
 
-        engine.setSpeechRate(state.speechRate)
-        val textToRead = buildString {
-            append(article.displayTitle)
-            append(". ")
+        applyVoice(engine, state)
+        val body = buildString {
             if (article.displaySummary.isNotBlank()) {
                 append(article.displaySummary)
             }
@@ -150,9 +168,32 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
                 append(" Pe scurt: ")
                 article.aiBullets.forEach { append(it.trimEnd('.', ' ')).append(". ") }
             }
+        }.trim()
+        if (state.voice == NarratorVoice.NARRATOR && body.isNotEmpty()) {
+            // Stil dramatic: titlu, pauză scurtă, apoi conținutul (doar ultimul segment are id-ul articolului).
+            engine.speak(article.displayTitle, TextToSpeech.QUEUE_FLUSH, null, "${article.id}${SEGMENT_SEPARATOR}title")
+            engine.playSilentUtterance(BuildConfig.NARRATOR_PAUSE_MS, TextToSpeech.QUEUE_ADD, "${article.id}${SEGMENT_SEPARATOR}pause")
+            engine.speak(body, TextToSpeech.QUEUE_ADD, null, article.id)
+        } else {
+            engine.speak("${article.displayTitle}. $body", TextToSpeech.QUEUE_FLUSH, null, article.id)
         }
-        engine.speak(textToRead, TextToSpeech.QUEUE_FLUSH, null, article.id)
         promoteToForeground()
+    }
+
+    /** Aplică presetul de voce (voce, ton, viteză) înainte de fiecare citire. */
+    private fun applyVoice(engine: TextToSpeech, state: NewsAudioState) {
+        when (state.voice) {
+            NarratorVoice.STANDARD -> {
+                defaultVoice?.let { if (engine.voice != it) engine.voice = it }
+                engine.setPitch(1.0f)
+                engine.setSpeechRate(state.speechRate)
+            }
+            NarratorVoice.NARRATOR -> {
+                narratorVoice?.let { if (engine.voice != it) engine.voice = it }
+                engine.setPitch(BuildConfig.NARRATOR_PITCH)
+                engine.setSpeechRate(state.speechRate * BuildConfig.NARRATOR_RATE)
+            }
+        }
     }
 
     private fun promoteToForeground() {
@@ -265,6 +306,9 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_PREVIOUS = "ro.newsfilter.app.audio.ACTION_PREVIOUS"
         const val ACTION_STOP = "ro.newsfilter.app.audio.ACTION_STOP"
         const val ACTION_SET_SPEED = "ro.newsfilter.app.audio.ACTION_SET_SPEED"
+        const val ACTION_SET_VOICE = "ro.newsfilter.app.audio.ACTION_SET_VOICE"
+
+        private const val SEGMENT_SEPARATOR = "#"
 
         private const val REQUEST_PREV = 101
         private const val REQUEST_PLAY_PAUSE = 102

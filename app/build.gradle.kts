@@ -30,6 +30,11 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
+        // Preset „Narator": numele vocii TTS instalate (gol = vocea implicită) + parametri de redare
+        buildConfigField("String", "NARRATOR_VOICE_NAME", "\"${localProperties.getProperty("narrator.voiceName", "")}\"")
+        buildConfigField("float", "NARRATOR_PITCH", "${localProperties.getProperty("narrator.pitch", "0.8")}f")
+        buildConfigField("float", "NARRATOR_RATE", "${localProperties.getProperty("narrator.rate", "0.9")}f")
+        buildConfigField("long", "NARRATOR_PAUSE_MS", "${localProperties.getProperty("narrator.pauseMs", "700")}L")
     }
 
     buildTypes {
