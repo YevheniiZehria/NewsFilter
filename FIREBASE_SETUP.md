@@ -52,10 +52,16 @@ Actions să fie nelimitate) și Android Studio / JDK pentru build.
 2. Locație: `eur3 (europe-west)` sau cea mai apropiată regiune; mod: **production**.
 3. Tab-ul **Rules**: înlocuiește conținutul cu cel din [`firebase/firestore.rules`](firebase/firestore.rules) → **Publish**.
 
-   Alternativ, cu Firebase CLI: `cd firebase && npx firebase-tools deploy --only firestore:rules --project <ID-proiect>`.
+   Recomandat, cu Firebase CLI (publică regulile **și** `firestore.indexes.json`):
+   `cd firebase && npx firebase-tools deploy --only firestore --project <ID-proiect>`.
+   `firestore.indexes.json` scoate de la indexare câmpul `articles` din `meta/index` (altfel
+   documentul ar atinge limita de 40 000 de intrări de index); din consolă se poate face manual la
+   **Indexes → Single field → Add exemption** (colecția `meta`, câmpul `articles`, toate indexările dezactivate).
 
 Regulile permit: citirea știrilor și cursurilor doar utilizatorilor autentificați, scrierea lor doar
-jobului de sincronizare (Admin SDK) și accesul la `users/{uid}/…` doar proprietarului contului.
+jobului de sincronizare (Admin SDK) și, doar proprietarului contului, profilul `users/{uid}`,
+`users/{uid}/bookmarks/…` și `users/{uid}/votes/…`, cu câmpuri și mărimi validate (orice altă
+subcolecție este închisă, ca un singur cont să nu poată consuma cota de scrieri a proiectului).
 
 ## 5. Cheile pentru jobul de sincronizare
 
