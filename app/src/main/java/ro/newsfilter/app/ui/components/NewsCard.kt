@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.Card
@@ -40,9 +41,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -89,6 +93,7 @@ fun HeroNewsCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
+            .readDimmed(article)
             .articleClickable(article, HeroShape, onArticleClick, onLongClick),
         shape = HeroShape,
         colors = CardDefaults.cardColors(containerColor = cardContainer(article)),
@@ -102,7 +107,8 @@ fun HeroNewsCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f),
-                fallbackEmojiSize = 56.sp
+                fallbackEmojiSize = 56.sp,
+                grayscale = article.isRead
             )
             CategoryPill(
                 categorySlug = article.category,
@@ -172,6 +178,7 @@ fun CompactNewsCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
+            .readDimmed(article)
             .articleClickable(article, CompactShape, onArticleClick, onLongClick),
         shape = CompactShape,
         colors = CardDefaults.cardColors(containerColor = cardContainer(article)),
@@ -217,7 +224,8 @@ fun CompactNewsCard(
                 modifier = Modifier
                     .size(88.dp)
                     .clip(ThumbnailShape),
-                fallbackEmojiSize = 32.sp
+                fallbackEmojiSize = 32.sp,
+                grayscale = article.isRead
             )
         }
 
@@ -227,6 +235,7 @@ fun CompactNewsCard(
                 .padding(start = 16.dp, end = 4.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            ReadBadge(article)
             PublishedLabel(publishedAt = article.publishedAt, modifier = Modifier.padding(end = 10.dp))
             ReadTimeLabel(minutes = article.readTimeMinutes)
             MarketImpactPill(
@@ -302,6 +311,7 @@ private fun MetaRow(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        ReadBadge(article)
         PublishedLabel(publishedAt = article.publishedAt, modifier = Modifier.padding(end = 10.dp))
         ReadTimeLabel(minutes = article.readTimeMinutes)
         MarketImpactPill(
@@ -433,7 +443,41 @@ private fun BookmarkButton(article: NewsArticle, onBookmarkClick: (String) -> Un
     }
 }
 
-/** Articolele deja citite sunt ușor „estompate”, ca să iasă în evidență cele noi. */
+/**
+ * Articolele citite rămân în feed pe durata perioadei de grație, dar „estompate”
+ * (opacitate redusă + imagine alb-negru), ca să iasă în evidență cele noi.
+ */
+private fun Modifier.readDimmed(article: NewsArticle): Modifier =
+    if (article.isRead) alpha(READ_ALPHA) else this
+
+/** Eticheta „✓ Citit” din rândul de metadate (doar pentru articolele citite). */
+@Composable
+private fun ReadBadge(article: NewsArticle) {
+    if (!article.isRead) return
+    Row(
+        modifier = Modifier.padding(end = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Check,
+            contentDescription = null,
+            modifier = Modifier.size(14.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = "Citit",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+private const val READ_ALPHA = 0.55f
+
+private val GrayscaleFilter = ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(0f) })
+
+/** Fundalul și titlul articolelor citite folosesc tonuri neutre. */
 @Composable
 private fun cardContainer(article: NewsArticle): Color =
     if (article.isRead) MaterialTheme.colorScheme.surfaceContainer
@@ -460,7 +504,8 @@ fun ArticleImage(
     categorySlug: String,
     emoji: String,
     modifier: Modifier = Modifier,
-    fallbackEmojiSize: TextUnit = 40.sp
+    fallbackEmojiSize: TextUnit = 40.sp,
+    grayscale: Boolean = false
 ) {
     if (imageUrl.isNullOrBlank()) {
         ImageFallback(categorySlug, emoji, fallbackEmojiSize, modifier)
@@ -474,6 +519,7 @@ fun ArticleImage(
             .build(),
         contentDescription = null, // decorativă: titlul articolului e citit separat
         contentScale = ContentScale.Crop,
+        colorFilter = if (grayscale) GrayscaleFilter else null,
         modifier = modifier,
         loading = {
             Box(

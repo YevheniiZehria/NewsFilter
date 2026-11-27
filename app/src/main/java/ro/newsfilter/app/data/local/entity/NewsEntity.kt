@@ -45,6 +45,10 @@ data class NewsEntity(
     @ColumnInfo(name = "is_read")
     val isRead: Boolean = false,
 
+    /** Momentul citirii (epoch ms); null = necitit sau citit înainte de v6. */
+    @ColumnInfo(name = "read_at")
+    val readAt: Long? = null,
+
     @ColumnInfo(name = "is_bookmarked")
     val isBookmarked: Boolean = false,
 
