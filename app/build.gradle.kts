@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +7,11 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
     alias(libs.plugins.google.services)
+}
+
+// Setări opționale din local.properties (nu se versionează); folosite pentru presetul vocii „Narator".
+val localProps = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
 }
 
 android {
@@ -19,6 +26,12 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Preset „Narator": numele vocii TTS instalate (gol = vocea implicită) + parametri de redare
+        buildConfigField("String", "NARRATOR_VOICE_NAME", "\"${localProps.getProperty("narrator.voiceName", "")}\"")
+        buildConfigField("float", "NARRATOR_PITCH", "${localProps.getProperty("narrator.pitch", "0.8")}f")
+        buildConfigField("float", "NARRATOR_RATE", "${localProps.getProperty("narrator.rate", "0.9")}f")
+        buildConfigField("long", "NARRATOR_PAUSE_MS", "${localProps.getProperty("narrator.pauseMs", "700")}L")
     }
 
     buildTypes {

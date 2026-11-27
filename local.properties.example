@@ -6,3 +6,11 @@ sdk.dir=/path/to/Android/sdk
 
 # Backend-ul (Firebase Auth + Cloud Firestore) se configurează prin app/google-services.json
 # (vezi FIREBASE_SETUP.md), nu aici.
+
+# Voce „Narator" pentru citirea rezumatelor (opțional, fără secrete).
+# Numele exacte ale vocilor instalate apar în Logcat (tag NewsFilter, "Available TTS voices")
+# când pornește player-ul audio; ex. ro-ro-x-vfv-local. Gol = vocea implicită a motorului TTS.
+narrator.voiceName=
+narrator.pitch=0.8
+narrator.rate=0.9
+narrator.pauseMs=700

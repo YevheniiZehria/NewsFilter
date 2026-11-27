@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material3.CircularProgressIndicator
@@ -40,6 +41,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import ro.newsfilter.app.core.audio.NarratorVoice
 import ro.newsfilter.app.core.audio.NewsAudioState
 
 /**
@@ -52,6 +54,7 @@ fun AudioMiniPlayer(
     onPlayPause: () -> Unit,
     onNext: () -> Unit,
     onCycleSpeed: () -> Unit,
+    onCycleVoice: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -145,6 +148,20 @@ fun AudioMiniPlayer(
                                 text = speedLabel,
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        IconButton(onClick = onCycleVoice) {
+                            val isNarrator = state.voice == NarratorVoice.NARRATOR
+                            Icon(
+                                imageVector = Icons.Filled.RecordVoiceOver,
+                                contentDescription = "Voce: ${state.voice.label}",
+                                tint = if (isNarrator) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                modifier = Modifier.size(20.dp)
                             )
                         }
 
