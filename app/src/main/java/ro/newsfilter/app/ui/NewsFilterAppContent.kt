@@ -131,6 +131,7 @@ fun NewsFilterAppContent(
                             onPlayPause = audioPlayerViewModel::togglePlayPause,
                             onNext = audioPlayerViewModel::next,
                             onCycleSpeed = audioPlayerViewModel::cycleSpeed,
+                            onCycleVoice = audioPlayerViewModel::cycleVoice,
                             onClose = audioPlayerViewModel::stop
                         )
                         AnimatedVisibility(

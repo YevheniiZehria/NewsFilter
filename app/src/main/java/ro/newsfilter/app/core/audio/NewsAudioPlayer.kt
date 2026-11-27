@@ -84,10 +84,18 @@ class NewsAudioPlayer @Inject constructor(
         }
     }
 
+    /** Comută presetul de voce: Standard ↔ Narator. */
+    fun cycleVoice() {
+        _state.update { it.copy(voice = it.voice.next()) }
+        if (_state.value.isVisible) {
+            sendServiceAction(NewsAudioService.ACTION_SET_VOICE, isForegroundStart = false)
+        }
+    }
+
     /** Oprește redarea, închide serviciul foreground și ascunde mini-player-ul. */
     fun stop() {
         _state.update {
-            NewsAudioState(speechRate = it.speechRate)
+            NewsAudioState(speechRate = it.speechRate, voice = it.voice)
         }
         sendServiceAction(NewsAudioService.ACTION_STOP, isForegroundStart = false)
     }
@@ -120,7 +128,7 @@ class NewsAudioPlayer @Inject constructor(
 
     /** Resetare completă a stării când serviciul este oprit din notificare. */
     internal fun onStoppedFromService() {
-        _state.update { NewsAudioState(speechRate = it.speechRate) }
+        _state.update { NewsAudioState(speechRate = it.speechRate, voice = it.voice) }
     }
 
     private fun sendServiceAction(action: String, isForegroundStart: Boolean) {
