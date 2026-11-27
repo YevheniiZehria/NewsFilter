@@ -19,12 +19,13 @@ import ro.newsfilter.app.data.local.entity.NewsEntity
  *  - v4 = Smart Digest (idei cheie + etichete) și analiza „Aprofundează”;
  *  - v5 = Market Pulse (perechea valutară influențată, direcția și nota AI).
  *  - v6 = titlul tradus în română de AI (ai_title);
- *  - v7 = voturile comunității (upvotes / downvotes).
+ *  - v7 = voturile comunității (upvotes / downvotes);
+ *  - v8 = `read_at` (momentul citirii: articolul rămâne estompat în feed o perioadă de grație).
  * exportSchema = true păstrează istoricul schemelor în app/schemas.
  */
 @Database(
     entities = [NewsEntity::class],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -76,6 +77,16 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE news ADD COLUMN upvotes INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE news ADD COLUMN downvotes INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        /**
+         * Adaugă momentul citirii. Articolele deja citite rămân cu `read_at = NULL`,
+         * deci continuă să fie ascunse din feed (fără perioadă de grație retroactivă).
+         */
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE news ADD COLUMN read_at INTEGER")
             }
         }
     }

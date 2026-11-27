@@ -35,6 +35,7 @@ import ro.newsfilter.app.domain.model.MarketPairs
 import ro.newsfilter.app.domain.model.MarketPulse
 import ro.newsfilter.app.domain.model.MarketRange
 import ro.newsfilter.app.domain.model.NewsArticle
+import ro.newsfilter.app.domain.model.READ_GRACE_PERIOD_MS
 import ro.newsfilter.app.domain.repository.AuthRepository
 import ro.newsfilter.app.domain.repository.MarketRepository
 import ro.newsfilter.app.domain.repository.NewsRepository
@@ -259,7 +260,7 @@ class FeedViewModel @Inject constructor(
                         it.copy(
                             articles = articles,
                             cacheLoaded = true,
-                            totalReadTimeMinutes = articles.sumOf { a -> a.readTimeMinutes },
+                            totalReadTimeMinutes = articles.filterNot { a -> a.isRead }.sumOf { a -> a.readTimeMinutes },
                             error = if (articles.isNotEmpty()) null else it.error
                         )
                     }
@@ -569,12 +570,12 @@ class FeedViewModel @Inject constructor(
     /** Varianta din meniul contextual: marchează articolul ca citit și confirmă acțiunea. */
     fun markAsReadFromMenu(articleId: String) {
         markAsRead(articleId)
-        _messages.trySend("Marcat ca citit și scos din pachet.")
+        _messages.trySend("Marcat ca citit — dispare din pachet în ${READ_GRACE_PERIOD_MS / 3_600_000} ore.")
     }
 
     /** Pornește redarea audio (Text-to-Speech) pentru întregul pachet curent de știri. */
     fun playAudioPack() {
-        val articles = _uiState.value.articles
+        val articles = _uiState.value.articles.filterNot { it.isRead }
         if (articles.isEmpty()) return
         audioPlayer.playPack(articles)
     }

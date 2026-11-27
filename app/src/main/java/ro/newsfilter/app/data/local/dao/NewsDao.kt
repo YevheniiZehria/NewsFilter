@@ -22,7 +22,8 @@ interface NewsDao {
     suspend fun insertAll(articles: List<NewsEntity>)
 
     /**
-     * Feed-ul „Pentru tine”: articolele necitite din categoriile alese, cele mai noi primele.
+     * Feed-ul „Pentru tine”: articolele din categoriile alese, cele mai noi primele — necitite,
+     * plus cele citite după [readCutoff] (perioada de grație, afișate estompat).
      * Flow reactiv — sursa unică de adevăr pentru ecranul principal.
      *
      * Căutarea [query] (gol = fără filtru) caută în titlu (original și tradus de AI), descriere,
@@ -32,7 +33,7 @@ interface NewsDao {
     @Query(
         """
         SELECT * FROM news
-        WHERE category IN (:categories) AND is_read = 0
+        WHERE category IN (:categories) AND (is_read = 0 OR read_at > :readCutoff)
           AND (:query = ''
                OR title LIKE '%' || :query || '%' ESCAPE '\'
                OR ai_title LIKE '%' || :query || '%' ESCAPE '\'
@@ -43,7 +44,7 @@ interface NewsDao {
         LIMIT :limit
         """
     )
-    fun observeFeed(categories: List<String>, query: String, limit: Int): Flow<List<NewsEntity>>
+    fun observeFeed(categories: List<String>, query: String, limit: Int, readCutoff: Long): Flow<List<NewsEntity>>
 
     /**
      * Articolele din feed-ul Firestore aflate în cache (fără știrile locale și fără copiile din favorite).
@@ -72,14 +73,23 @@ interface NewsDao {
     @Query("SELECT * FROM news WHERE id IN (:ids)")
     suspend fun getArticlesByIds(ids: List<String>): List<NewsEntity>
 
-    @Query("UPDATE news SET is_read = 1 WHERE id = :articleId")
-    suspend fun markAsRead(articleId: String)
+    /**
+     * Marchează articolul ca citit. `read_at` se setează doar la prima citire, ca redeschiderea
+     * să nu prelungească perioada de grație.
+     */
+    @Query(
+        """
+        UPDATE news SET read_at = CASE WHEN is_read = 0 THEN :readAt ELSE read_at END, is_read = 1
+        WHERE id = :articleId
+        """
+    )
+    suspend fun markAsRead(articleId: String, readAt: Long)
 
     /**
      * Resetează istoricul de citire: toate articolele redevin „necitite”.
      * @return numărul de articole resetate
      */
-    @Query("UPDATE news SET is_read = 0 WHERE is_read = 1")
+    @Query("UPDATE news SET is_read = 0, read_at = NULL WHERE is_read = 1")
     suspend fun resetReadHistory(): Int
 
     /** Setează explicit starea de favorit (valoare exactă, sincronizată și cu serverul). */

@@ -3,6 +3,12 @@ package ro.newsfilter.app.domain.model
 import androidx.compose.runtime.Immutable
 
 /**
+ * Cât timp rămâne vizibil (estompat) în feed un articol după ce a fost citit,
+ * înainte să dispară din pachet. Favoritele nu sunt afectate.
+ */
+const val READ_GRACE_PERIOD_MS: Long = 2 * 60 * 60 * 1000L
+
+/**
  * Model de domeniu pur pentru un articol de știri.
  * Este independent de sursa de date (rețea sau bază de date locală).
  *
@@ -16,6 +22,7 @@ import androidx.compose.runtime.Immutable
  * @property category Categoria articolului (slug: tech, sport etc.)
  * @property publishedAt Data publicării (ISO 8601 string)
  * @property isRead Dacă utilizatorul a citit deja articolul
+ * @property readAt Momentul citirii (epoch ms); null = necitit sau citit demult
  * @property isBookmarked Dacă articolul este salvat la favorite
  * @property userVote Votul utilizatorului (true = îmi place, false = nu-mi place, null = nevotat)
  * @property fullContent Textul integral (scraping); null = indisponibil
@@ -41,6 +48,7 @@ data class NewsArticle(
     val category: String,
     val publishedAt: String,
     val isRead: Boolean = false,
+    val readAt: Long? = null,
     val isBookmarked: Boolean = false,
     val userVote: Boolean? = null,
     val fullContent: String? = null,

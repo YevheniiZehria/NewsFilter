@@ -10,8 +10,12 @@ import com.google.firebase.firestore.Source
 import com.google.android.gms.tasks.Task
 import androidx.room.withTransaction
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -33,6 +37,7 @@ import ro.newsfilter.app.data.remote.localnews.GoogleNewsRssSource
 import ro.newsfilter.app.data.remote.localnews.LocalNewsAiEnricher
 import ro.newsfilter.app.domain.model.Category
 import ro.newsfilter.app.domain.model.NewsArticle
+import ro.newsfilter.app.domain.model.READ_GRACE_PERIOD_MS
 import ro.newsfilter.app.domain.repository.NewsRepository
 import java.io.IOException
 import java.time.LocalDate
@@ -58,6 +63,7 @@ import javax.inject.Singleton
  * - Starea personală (citit, vot) trăiește în Room; favoritele și voturile sunt și în Firestore,
  *   ca să revină după reautentificare / pe alt dispozitiv.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 @Singleton
 class NewsRepositoryImpl @Inject constructor(
     private val firestore: FirebaseFirestore,
@@ -74,8 +80,21 @@ class NewsRepositoryImpl @Inject constructor(
     /** Voturile rapide (ex. 👍 apoi 👎) se trimit pe rând: fiecare tranziție pornește de la cea anterioară. */
     private val voteMutex = Mutex()
 
+    /**
+     * Room re-emite doar la modificarea tabelei, nu și la trecerea timpului; de aceea limita
+     * perioadei de grație se recalculează la fiecare minut, iar articolele citite expirate
+     * dispar singure din feed.
+     */
     override fun observeFeed(categories: List<String>, query: String): Flow<List<NewsArticle>> =
-        newsDao.observeFeed(categories, query, FEED_LIMIT).map { list -> list.map { it.toDomain() } }
+        flow {
+            while (true) {
+                emit(System.currentTimeMillis() - READ_GRACE_PERIOD_MS)
+                delay(READ_CUTOFF_TICK_MS)
+            }
+        }
+            .flatMapLatest { cutoff -> newsDao.observeFeed(categories, query, FEED_LIMIT, cutoff) }
+            .distinctUntilChanged()
+            .map { list -> list.map { it.toDomain() } }
 
     /**
      * Știrile locale vin direct de pe dispozitiv, nu din Firestore: Bing News RSS (linkuri reale către
@@ -239,7 +258,7 @@ class NewsRepositoryImpl @Inject constructor(
     }
 
     override suspend fun markAsRead(articleId: String) {
-        newsDao.markAsRead(articleId)
+        newsDao.markAsRead(articleId, System.currentTimeMillis())
     }
 
     override suspend fun resetReadHistory(): Int = newsDao.resetReadHistory()
@@ -301,6 +320,7 @@ class NewsRepositoryImpl @Inject constructor(
                 }
                 base.copy(
                     isRead = local?.isRead ?: false,
+                    readAt = local?.readAt,
                     isBookmarked = if (serverBookmarksWin || local == null) article.isBookmarked else local.isBookmarked,
                     userVote = local?.userVote,
                     deepDive = base.deepDive ?: local?.deepDive,
@@ -366,6 +386,7 @@ class NewsRepositoryImpl @Inject constructor(
     private companion object {
         const val TAG = "NewsFilter"
         const val FEED_LIMIT = 50
+        const val READ_CUTOFF_TICK_MS = 60_000L
         const val UPDATED_AT = "updatedAt"
         const val UPVOTES = "upvotes"
         const val DOWNVOTES = "downvotes"
