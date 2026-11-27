@@ -117,6 +117,13 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
+    /** Salvează locația pentru știrile locale; Feed-ul le descarcă automat la schimbare. */
+    fun setLocalNews(city: String, country: String) {
+        viewModelScope.launch {
+            preferencesRepository.updateLocalNews(city.trim(), country.trim())
+        }
+    }
+
     /** Deconectare — `MainActivity` observă sesiunea și revine la `AuthActivity`. */
     fun logout() {
         viewModelScope.launch { authRepository.logout() }

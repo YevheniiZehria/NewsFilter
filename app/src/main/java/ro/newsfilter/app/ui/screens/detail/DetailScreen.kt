@@ -85,6 +85,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ro.newsfilter.app.core.util.ArticleIntents
+import ro.newsfilter.app.domain.model.Category
 import ro.newsfilter.app.domain.model.NewsArticle
 import ro.newsfilter.app.ui.components.ArticleImage
 import ro.newsfilter.app.ui.components.CategoryPill
@@ -97,7 +98,7 @@ import ro.newsfilter.app.ui.components.ReadTimeLabel
  *    butoane circulare translucide: „Înapoi” (stânga) și „Distribuie” (dreapta);
  *  - pastila de categorie, titlu mare, rând de metadate (sursă • timp de citire);
  *  - rezumatul AI cu spațiere aerisită (lineHeight 26.sp);
- *  - CTA principal „Citește articolul complet” → Chrome Custom Tabs (performanță
+ *  - CTA principal „Citește articolul original” → Chrome Custom Tabs (performanță
  *    nativă Chrome, cookie-urile utilizatorului, fără WebView propriu), cu fallback
  *    la ACTION_VIEW dacă nu există un browser compatibil;
  *  - bară de acțiuni jos: Like / Dislike (feedback instant + vot salvat în Firestore, votul
@@ -366,13 +367,16 @@ private fun ArticleContent(
                     }
                 }
 
-                Spacer(modifier = Modifier.height(20.dp))
-                DeepDiveSection(
-                    deepDive = deepDive,
-                    isLoading = isDeepDiveLoading,
-                    error = deepDiveError,
-                    onRequest = onRequestDeepDive
-                )
+                // Știrile locale (Google News, pe dispozitiv) nu trec prin Gemini → fără aprofundare.
+                if (article.category != Category.LOCAL.slug) {
+                    Spacer(modifier = Modifier.height(20.dp))
+                    DeepDiveSection(
+                        deepDive = deepDive,
+                        isLoading = isDeepDiveLoading,
+                        error = deepDiveError,
+                        onRequest = onRequestDeepDive
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(28.dp))
 
@@ -385,7 +389,7 @@ private fun ArticleContent(
                         .fillMaxWidth()
                         .height(54.dp)
                 ) {
-                    Text(text = "Citește articolul complet", style = MaterialTheme.typography.titleSmall)
+                    Text(text = "Citește articolul original", style = MaterialTheme.typography.titleSmall)
                     Spacer(modifier = Modifier.width(8.dp))
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.OpenInNew,

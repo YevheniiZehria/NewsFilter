@@ -15,8 +15,17 @@ import ro.newsfilter.app.domain.model.NewsArticle
  */
 interface NewsRepository {
 
-    /** Feed-ul local: articole necitite din [categories], cele mai noi primele. */
-    fun observeFeed(categories: List<String>): Flow<List<NewsArticle>>
+    /**
+     * Feed-ul local: articole necitite din [categories], cele mai noi primele,
+     * filtrate după textul [query] (gol = fără căutare).
+     */
+    fun observeFeed(categories: List<String>, query: String = ""): Flow<List<NewsArticle>>
+
+    /**
+     * Știri locale: descarcă de pe dispozitiv (Google News RSS) știrile pentru [city] / [country]
+     * și le salvează în cache cu categoria `local`. Nu face nimic dacă ambele sunt goale.
+     */
+    suspend fun syncLocalNews(city: String, country: String)
 
     /**
      * Descarcă din Firestore știrile noi / actualizate de la ultima sincronizare (incremental)

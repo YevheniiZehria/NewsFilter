@@ -24,16 +24,29 @@ interface NewsDao {
     /**
      * Feed-ul „Pentru tine”: articolele necitite din categoriile alese, cele mai noi primele.
      * Flow reactiv — sursa unică de adevăr pentru ecranul principal.
+     *
+     * Căutarea [query] (gol = fără filtru) caută în titlu, descriere, rezumatul AI și etichete.
+     * Caracterele speciale LIKE (`%`, `_`, `\`) trebuie escapate de apelant cu `\`.
+     * Notă: LIKE din SQLite ignoră majusculele doar pentru literele ASCII (ex. „ș” ≠ „Ș”).
      */
     @Query(
         """
         SELECT * FROM news
         WHERE category IN (:categories) AND is_read = 0
+          AND (:query = ''
+               OR title LIKE '%' || :query || '%' ESCAPE '\'
+               OR summary LIKE '%' || :query || '%' ESCAPE '\'
+               OR ai_summary LIKE '%' || :query || '%' ESCAPE '\'
+               OR ai_tags LIKE '%' || :query || '%' ESCAPE '\')
         ORDER BY published_at DESC
         LIMIT :limit
         """
     )
-    fun observeFeed(categories: List<String>, limit: Int): Flow<List<NewsEntity>>
+    fun observeFeed(categories: List<String>, query: String, limit: Int): Flow<List<NewsEntity>>
+
+    /** Șterge articolele nesalvate din [category] care nu sunt în [keepIds] (știrile locale vechi). */
+    @Query("DELETE FROM news WHERE category = :category AND is_bookmarked = 0 AND id NOT IN (:keepIds)")
+    suspend fun deleteStaleInCategory(category: String, keepIds: List<String>)
 
     /** Toate articolele salvate (favorite). Flow reactiv. */
     @Query("SELECT * FROM news WHERE is_bookmarked = 1 ORDER BY published_at DESC")

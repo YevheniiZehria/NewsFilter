@@ -20,6 +20,8 @@ import ro.newsfilter.app.data.preferences.UserPreferencesRepository
 import ro.newsfilter.app.data.remote.firestore.FirestorePaths
 import ro.newsfilter.app.data.remote.firestore.toBookmarkData
 import ro.newsfilter.app.data.remote.firestore.toNewsArticleOrNull
+import ro.newsfilter.app.data.remote.localnews.GoogleNewsRssSource
+import ro.newsfilter.app.domain.model.Category
 import ro.newsfilter.app.domain.model.NewsArticle
 import ro.newsfilter.app.domain.repository.NewsRepository
 import java.io.IOException
@@ -49,11 +51,27 @@ class NewsRepositoryImpl @Inject constructor(
     private val sessionManager: SessionManager,
     private val preferences: UserPreferencesRepository,
     private val newsDao: NewsDao,
-    private val networkMonitor: NetworkMonitor
+    private val networkMonitor: NetworkMonitor,
+    private val localNewsSource: GoogleNewsRssSource
 ) : NewsRepository {
 
-    override fun observeFeed(categories: List<String>): Flow<List<NewsArticle>> =
-        newsDao.observeFeed(categories, FEED_LIMIT).map { list -> list.map { it.toDomain() } }
+    override fun observeFeed(categories: List<String>, query: String): Flow<List<NewsArticle>> =
+        newsDao.observeFeed(categories, query, FEED_LIMIT).map { list -> list.map { it.toDomain() } }
+
+    /**
+     * Știrile locale vin direct de pe dispozitiv (Google News RSS), nu din Firestore.
+     * Știrile locale care nu mai apar în rezultat (alt oraș / mai vechi) și nu sunt salvate se
+     * șterg, ca feed-ul „📍” să arate doar locația curentă; starea locală (citit, salvat) a
+     * celorlalte se păstrează. O eroare de rețea nu șterge nimic (cache-ul rămâne pentru offline).
+     */
+    override suspend fun syncLocalNews(city: String, country: String) {
+        if (city.isBlank() && country.isBlank()) return
+        ensureOnline()
+        val articles = localNewsSource.fetch(city.trim(), country.trim())
+        newsDao.deleteStaleInCategory(Category.LOCAL.slug, articles.map { it.id })
+        val saved = upsertKeepingLocalState(articles, serverBookmarksWin = false)
+        Log.d(TAG, "Știri locale ($city, $country): $saved salvate în cache")
+    }
 
     /**
      * Sincronizează toate categoriile (Room filtrează după [categories] și timpul de lectură),

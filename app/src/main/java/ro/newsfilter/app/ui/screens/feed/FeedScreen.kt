@@ -3,7 +3,22 @@ package ro.newsfilter.app.ui.screens.feed
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.SearchOff
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -47,6 +62,8 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import androidx.lifecycle.Lifecycle
@@ -78,7 +95,8 @@ import java.util.Locale
  *  1. Antet minimalist: salut în funcție de oră + data curentă în română;
  *  2. Selectorul de buget de timp (pastilă 2 / 5 / 15 min);
  *  3. Rezumatul bugetului: badge „3 articole • 4 din 5 min” + bară de progres;
- *  4. Primul articol ca card Hero, restul ca carduri compacte.
+ *  4. Bara de căutare (filtrare în timp real) + chip-urile „Toate” / „📍 Oraș” (știri locale);
+ *  5. Primul articol ca card Hero, restul ca carduri compacte.
  *
  * Evenimente UI:
  *  - atingere pe card → detaliu; apăsare lungă → [ArticleActionsSheet] (meniu contextual);
@@ -92,12 +110,14 @@ import java.util.Locale
  * imbricat în acest ecran.
  *
  * @param onArticleClick Callback la click pe o știre (navighează la detaliu)
+ * @param onOpenSettings Deschide Setările (chip-ul „📍” fără oraș setat)
  * @param viewModel FeedViewModel injectat prin Hilt
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FeedScreen(
     onArticleClick: (String) -> Unit,
+    onOpenSettings: () -> Unit = {},
     viewModel: FeedViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -152,8 +172,11 @@ fun FeedScreen(
 
     val onCardLongClick: (NewsArticle) -> Unit = { menuArticle = it }
 
+    val isSearching = uiState.searchQuery.isNotBlank()
     val contentState = when {
         uiState.isLoading -> FeedContent.Loading
+        isSearching && uiState.articles.isEmpty() -> FeedContent.NoResults
+        uiState.localOnly && uiState.articles.isEmpty() -> FeedContent.Empty
         uiState.error != null && uiState.articles.isEmpty() -> FeedContent.Error
         uiState.articles.isEmpty() -> FeedContent.Empty
         else -> FeedContent.List
@@ -201,8 +224,29 @@ fun FeedScreen(
                         )
                     }
 
-                    // === 2. Widget valutar: curs + grafic + convertor + știrea care mișcă piața ===
-                    uiState.marketPulse?.let { pulse ->
+                    // === 2. Căutare + filtrul local ===
+                    item(key = "search") {
+                        FeedSearchBar(
+                            query = uiState.searchQuery,
+                            onQueryChange = viewModel::onSearchQueryChange,
+                            onClear = viewModel::clearSearch,
+                            modifier = Modifier.padding(horizontal = 16.dp)
+                        )
+                    }
+                    item(key = "filters") {
+                        FeedFilterChips(
+                            localOnly = uiState.localOnly,
+                            localLabel = uiState.localLabel,
+                            hasLocalNews = uiState.hasLocalNews,
+                            onSelectAll = { viewModel.selectLocal(false) },
+                            onSelectLocal = {
+                                if (uiState.hasLocalNews) viewModel.selectLocal(true) else onOpenSettings()
+                            }
+                        )
+                    }
+
+                    // === 3. Widget valutar (ascuns cât timp utilizatorul caută / filtrează local) ===
+                    uiState.marketPulse?.takeIf { uiState.searchQuery.isBlank() && !uiState.localOnly }?.let { pulse ->
                         item(key = "market_widget") {
                             MarketWidgetCard(
                                 pulse = pulse,
@@ -220,7 +264,7 @@ fun FeedScreen(
                         }
                     }
 
-                    // === 3. Conținut: cele mai recente știri ===
+                    // === 4. Conținut: cele mai recente știri ===
                     when (contentState) {
                         FeedContent.Loading -> item(key = "loading") {
                             LoadingShimmer(
@@ -241,12 +285,32 @@ fun FeedScreen(
                             )
                         }
 
+                        FeedContent.NoResults -> item(key = "no_results") {
+                            StatusView(
+                                icon = Icons.Outlined.SearchOff,
+                                title = "Niciun rezultat",
+                                message = "Nu am găsit știri pentru „${uiState.searchQuery.trim()}”. " +
+                                    "Încearcă alte cuvinte cheie.",
+                                actionLabel = "Șterge căutarea",
+                                actionIcon = Icons.Filled.Close,
+                                onAction = viewModel::clearSearch,
+                                modifier = Modifier
+                                    .fillParentMaxHeight(0.5f)
+                                    .animateItem()
+                            )
+                        }
+
                         FeedContent.Empty -> item(key = "empty") {
                             StatusView(
-                                icon = Icons.Outlined.DoneAll,
-                                title = "Ești la zi!",
-                                message = "Nu am găsit știri noi pentru preferințele tale. " +
-                                    "Adaugă mai multe domenii din Setări sau reîmprospătează.",
+                                icon = if (uiState.localOnly) Icons.Outlined.LocationOn else Icons.Outlined.DoneAll,
+                                title = if (uiState.localOnly) "Nicio știre locală" else "Ești la zi!",
+                                message = if (uiState.localOnly) {
+                                    "Nu am găsit știri locale pentru ${uiState.localLabel}. " +
+                                        "Verifică orașul din Setări sau reîmprospătează."
+                                } else {
+                                    "Nu am găsit știri noi pentru preferințele tale. " +
+                                        "Adaugă mai multe domenii din Setări sau reîmprospătează."
+                                },
                                 actionLabel = "Reîmprospătează",
                                 actionIcon = Icons.Filled.Refresh,
                                 onAction = { viewModel.loadNews() },
@@ -266,7 +330,11 @@ fun FeedScreen(
                             if (index == 0) {
                                 Column(modifier = itemModifier) {
                                     Text(
-                                        text = "Cele mai recente știri",
+                                        text = when {
+                                            isSearching -> "Rezultatele căutării"
+                                            uiState.localOnly -> "Știri din ${uiState.localLabel}"
+                                            else -> "Cele mai recente știri"
+                                        },
                                         style = MaterialTheme.typography.titleSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.padding(start = 4.dp, bottom = 10.dp)
@@ -419,7 +487,80 @@ private fun FeedOverflowMenu(
     }
 }
 
-private enum class FeedContent { Loading, Error, Empty, List }
+/**
+ * Bara de căutare din Feed: filtrează în timp real titlul, descrierea, rezumatul AI și etichetele.
+ */
+@Composable
+private fun FeedSearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        placeholder = { Text("Caută știri, subiecte sau cuvinte cheie...") },
+        leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
+        trailingIcon = if (query.isNotEmpty()) {
+            {
+                IconButton(onClick = onClear) {
+                    Icon(Icons.Filled.Close, contentDescription = "Șterge căutarea")
+                }
+            }
+        } else null,
+        singleLine = true,
+        shape = RoundedCornerShape(28.dp),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { keyboard?.hide() }),
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+            unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
+        ),
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
+/** Chip-urile „Toate” / „📍 Oraș”; fără locație setată, chip-ul local deschide Setările. */
+@Composable
+private fun FeedFilterChips(
+    localOnly: Boolean,
+    localLabel: String,
+    hasLocalNews: Boolean,
+    onSelectAll: () -> Unit,
+    onSelectLocal: () -> Unit
+) {
+    val colors = FilterChipDefaults.filterChipColors(
+        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+    )
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
+    ) {
+        FilterChip(
+            selected = !localOnly,
+            onClick = onSelectAll,
+            label = { Text("Toate") },
+            shape = CircleShape,
+            colors = colors
+        )
+        FilterChip(
+            selected = localOnly,
+            onClick = onSelectLocal,
+            label = { Text(if (hasLocalNews) "📍 $localLabel" else "📍 Setează orașul") },
+            shape = CircleShape,
+            colors = colors
+        )
+    }
+}
+
+private enum class FeedContent { Loading, Error, Empty, NoResults, List }
 
 /** Intervalul de actualizare Market Pulse cât timp Feed-ul este vizibil. */
 

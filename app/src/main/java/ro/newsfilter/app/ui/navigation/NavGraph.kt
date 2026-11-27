@@ -46,6 +46,14 @@ fun NavGraph(
             FeedScreen(
                 onArticleClick = { articleId ->
                     navController.navigate(Routes.Detail.createRoute(articleId))
+                },
+                // Ca tab-ul „Setări” din BottomNavBar (fără destinații duplicate pe back stack).
+                onOpenSettings = {
+                    navController.navigate(Routes.Settings.route) {
+                        popUpTo(Routes.Feed.route) { saveState = true }
+                        launchSingleTop = true
+                        restoreState = true
+                    }
                 }
             )
         }

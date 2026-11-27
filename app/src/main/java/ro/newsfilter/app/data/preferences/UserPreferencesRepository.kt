@@ -40,6 +40,8 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
  * @property userEmail Email-ul utilizatorului autentificat
  * @property userName Numele afișat al utilizatorului autentificat
  * @property authProvider Metoda de autentificare: "email" sau "google"
+ * @property localCity Orașul pentru știrile locale (gol = nesetat)
+ * @property localCountry Țara pentru știrile locale (gol = nesetată)
  */
 data class UserPreferences(
     val selectedCategories: List<String> = emptyList(),
@@ -53,8 +55,13 @@ data class UserPreferences(
     val isLoggedIn: Boolean = false,
     val userEmail: String = "",
     val userName: String = "",
-    val authProvider: String = ""
-)
+    val authProvider: String = "",
+    val localCity: String = "",
+    val localCountry: String = ""
+) {
+    /** Există o locație pentru știrile locale (oraș și/sau țară). */
+    val hasLocalNews: Boolean get() = localCity.isNotBlank() || localCountry.isNotBlank()
+}
 
 /**
  * Repository pentru preferințele utilizatorului, implementat cu DataStore.
@@ -80,6 +87,8 @@ class UserPreferencesRepository @Inject constructor(
         val USER_EMAIL = stringPreferencesKey("user_email")
         val USER_NAME = stringPreferencesKey("user_name")
         val AUTH_PROVIDER = stringPreferencesKey("auth_provider")
+        val LOCAL_CITY = stringPreferencesKey("local_city")
+        val LOCAL_COUNTRY = stringPreferencesKey("local_country")
 
         /** UID-ul Firebase al utilizatorului autentificat (oglindă a `FirebaseAuth.currentUser`). */
         val FIREBASE_UID = stringPreferencesKey("firebase_uid")
@@ -112,7 +121,9 @@ class UserPreferencesRepository @Inject constructor(
             isLoggedIn = (prefs[Keys.IS_LOGGED_IN] ?: false) && prefs[Keys.FIREBASE_UID] != null,
             userEmail = prefs[Keys.USER_EMAIL].orEmpty(),
             userName = prefs[Keys.USER_NAME].orEmpty(),
-            authProvider = prefs[Keys.AUTH_PROVIDER].orEmpty()
+            authProvider = prefs[Keys.AUTH_PROVIDER].orEmpty(),
+            localCity = prefs[Keys.LOCAL_CITY].orEmpty(),
+            localCountry = prefs[Keys.LOCAL_COUNTRY].orEmpty()
         )
     }
 
@@ -163,6 +174,14 @@ class UserPreferencesRepository @Inject constructor(
     suspend fun updateShakeToRefresh(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[Keys.SHAKE_TO_REFRESH] = enabled
+        }
+    }
+
+    /** Salvează orașul și țara pentru știrile locale (șir gol = nesetat). */
+    suspend fun updateLocalNews(city: String, country: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.LOCAL_CITY] = city
+            prefs[Keys.LOCAL_COUNTRY] = country
         }
     }
 
