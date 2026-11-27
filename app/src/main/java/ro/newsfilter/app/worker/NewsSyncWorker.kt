@@ -41,7 +41,7 @@ class NewsSyncWorker @AssistedInject constructor(
 
         return try {
             newsRepository.syncFeed(
-                categories = prefs.selectedCategories.ifEmpty { Category.allSlugs },
+                categories = Category.effective(prefs.selectedCategories),
                 maxMinutes = prefs.defaultMinutes
             )
             newsRepository.clearOldCache(daysOld = 7)

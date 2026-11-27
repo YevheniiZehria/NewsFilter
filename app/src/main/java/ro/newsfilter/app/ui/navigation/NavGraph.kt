@@ -1,6 +1,7 @@
 package ro.newsfilter.app.ui.navigation
 
 import androidx.compose.runtime.Composable
+import androidx.lifecycle.Lifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -78,9 +79,15 @@ fun NavGraph(
             arguments = listOf(
                 navArgument("articleId") { type = NavType.StringType }
             )
-        ) {
+        ) { backStackEntry ->
             DetailScreen(
-                onBackClick = { navController.popBackStack() }
+                // Dublu-tap pe „Înapoi” scotea și ecranul anterior (ecran gol): acționăm doar
+                // cât destinația curentă e activă.
+                onBackClick = {
+                    if (backStackEntry.lifecycle.currentState == Lifecycle.State.RESUMED) {
+                        navController.popBackStack()
+                    }
+                }
             )
         }
     }

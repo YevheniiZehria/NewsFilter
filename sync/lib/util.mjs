@@ -11,11 +11,31 @@ export const pairKey = (pair) => pair.replace('/', '_');
 
 export const round = (v, d) => Number(Number(v).toFixed(d));
 
-/** fetch cu timeout; aruncă eroare la status HTTP ≠ 2xx. */
+/** fetch cu timeout; aruncă eroare (cu `status`) la status HTTP ≠ 2xx. */
 export async function fetchWithTimeout(url, { timeoutMs = 20_000, ...init } = {}) {
   const res = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
-  if (!res.ok) throw new Error(`HTTP ${res.status} pentru ${url}`);
+  if (!res.ok) {
+    const err = new Error(`HTTP ${res.status} pentru ${url.split('?')[0]}`);
+    err.status = res.status;
+    throw err;
+  }
   return res;
+}
+
+/**
+ * URL canonic pentru deduplicare: fără query (parametri de tracking `at_*`) și fragment,
+ * același host pentru bbc.co.uk / bbc.com.
+ */
+export function canonicalUrl(raw) {
+  try {
+    const u = new URL(raw);
+    u.search = '';
+    u.hash = '';
+    u.hostname = u.hostname.replace(/^www\.bbc\.co\.uk$/, 'www.bbc.com').replace(/^bbc\.co\.uk$/, 'www.bbc.com');
+    return u.toString();
+  } catch {
+    return raw;
+  }
 }
 
 export async function getJson(url, timeoutMs) {

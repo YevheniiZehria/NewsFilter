@@ -4,7 +4,11 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.tasks.await
 import ro.newsfilter.app.core.util.NetworkMonitor
 import ro.newsfilter.app.data.local.dao.NewsDao
@@ -58,13 +62,17 @@ class MarketRepositoryImpl @Inject constructor(
 
     override fun observeMarketPulse(): Flow<MarketPulse> =
         combine(
-            observeRates(),
-            newsDao.observeLatestMarketEvent(),
+            // Listener-ul se reconectează singur după o eroare (rețea, permisiuni temporare).
+            observeRates().retryWhen { _, attempt -> delay(RETRY_DELAY_MS * (attempt + 1).coerceAtMost(6)); true },
+            // Orice scriere în `news` (citit, favorit, sincronizare) re-emite interogarea:
+            // trecem mai departe doar când știrea de impact chiar s-a schimbat.
+            newsDao.observeLatestMarketEvent().map { it?.toMarketEventOrNull() }.distinctUntilChanged(),
             newsDao.observeCommunitySentiment(Instant.now().minus(SENTIMENT_WINDOW).toString())
+                .distinctUntilChanged()
         ) { rates, latest, counts ->
             MarketPulse(
                 rates = rates,
-                latestEvent = latest?.toMarketEventOrNull(),
+                latestEvent = latest,
                 communitySentiment = counts.groupBy { it.pair }.mapValues { (_, rows) ->
                     CommunitySentiment(
                         bullish = rows.filter { it.sentiment == MarketSentiment.UP.name }.sumOf { it.count },
@@ -72,7 +80,7 @@ class MarketRepositoryImpl @Inject constructor(
                     )
                 }
             )
-        }
+        }.distinctUntilChanged()
 
     private fun observeRates(): Flow<List<MarketRate>> = callbackFlow {
         val registration = firestore.document(FirestorePaths.MARKET_PULSE)
@@ -179,6 +187,7 @@ class MarketRepositoryImpl @Inject constructor(
     }
 
     private companion object {
+        const val RETRY_DELAY_MS = 5_000L
         const val MINUTE_MS = 60_000L
         const val HOUR_MS = 60 * MINUTE_MS
         const val DAY_MS = 24 * HOUR_MS

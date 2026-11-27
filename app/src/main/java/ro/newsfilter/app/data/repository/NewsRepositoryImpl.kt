@@ -7,12 +7,17 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.Source
+import com.google.android.gms.tasks.Task
+import androidx.room.withTransaction
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
+import ro.newsfilter.app.data.local.AppDatabase
 import ro.newsfilter.app.core.auth.SessionManager
 import ro.newsfilter.app.core.network.UserFacingException
 import ro.newsfilter.app.core.util.NetworkMonitor
@@ -59,6 +64,7 @@ class NewsRepositoryImpl @Inject constructor(
     private val sessionManager: SessionManager,
     private val preferences: UserPreferencesRepository,
     private val newsDao: NewsDao,
+    private val database: AppDatabase,
     private val networkMonitor: NetworkMonitor,
     private val bingNewsSource: BingNewsRssSource,
     private val googleNewsSource: GoogleNewsRssSource,
@@ -111,7 +117,7 @@ class NewsRepositoryImpl @Inject constructor(
      */
     override suspend fun syncFeed(categories: List<String>, maxMinutes: Int) {
         ensureOnline()
-        requireUid()
+        val uid = requireUid()
         val articles = firestore.collection(FirestorePaths.ARTICLES)
         // Cursorul (DataStore) poate supraviețui unui cache Room golit (migrare distructivă, curățare,
         // date șterse): fără articole în cache, sincronizarea incrementală n-ar mai aduce nimic.
@@ -119,29 +125,42 @@ class NewsRepositoryImpl @Inject constructor(
             .takeIf { it == 0L || newsDao.countFeedArticles(Category.LOCAL.slug) > 0 } ?: 0L
         val docs = mutableListOf<DocumentSnapshot>()
 
+        // Source.SERVER: altfel, pe o rețea proastă, Firestore întoarce în tăcere cache-ul din memorie (gol).
         if (lastSync == 0L) {
             // Prima sincronizare (cont nou / după deconectare): doar cele mai recente știri.
             docs += articles.orderBy(UPDATED_AT, Query.Direction.DESCENDING)
-                .limit(INITIAL_LIMIT).get().await().documents
+                .limit(INITIAL_LIMIT).get(Source.SERVER).await().documents
         } else {
-            var cursor = lastSync.toTimestamp()
+            // Toate articolele unei rulări a jobului au același `updatedAt`, deci paginile următoare
+            // continuă de la ultimul document (startAfter departajează după id), nu de la timestamp.
+            val newer = articles.whereGreaterThan(UPDATED_AT, lastSync.toTimestamp())
+                .orderBy(UPDATED_AT).limit(PAGE_SIZE)
+            var last: DocumentSnapshot? = null
             for (page in 0 until MAX_PAGES) {
-                val batch = articles.whereGreaterThan(UPDATED_AT, cursor)
-                    .orderBy(UPDATED_AT).limit(PAGE_SIZE).get().await().documents
+                val query = last?.let { newer.startAfter(it) } ?: newer
+                val batch = query.get(Source.SERVER).await().documents
                 docs += batch
                 if (batch.size < PAGE_SIZE) break
-                cursor = batch.last().getTimestamp(UPDATED_AT) ?: break
+                last = batch.last()
             }
         }
 
+        // Deconectare în timpul citirii: datele nu mai aparțin sesiunii curente (cache-ul a fost golit).
+        if (sessionManager.currentUid != uid) return
         val saved = upsertKeepingLocalState(docs.mapNotNull { it.toNewsArticleOrNull() }, serverBookmarksWin = false)
-        docs.mapNotNull { it.getTimestamp(UPDATED_AT) }.maxOrNull()?.let { preferences.setLastFeedSync(it.toMicros()) }
+        // Cursorul avansează doar până la ultima rulare citită complet: dacă ne-am oprit la MAX_PAGES
+        // în mijlocul unei rulări, documentele ei rămase vin la sincronizarea următoare (cu „>=” ar fi
+        // re-citite toate, cu „>” s-ar pierde), așa că le re-citim prin cursorul rulării precedente.
+        val stamps = docs.mapNotNull { it.getTimestamp(UPDATED_AT) }
+        val complete = docs.size < MAX_PAGES * PAGE_SIZE
+        val newCursor = if (complete) stamps.maxOrNull() else stamps.maxOrNull()?.let { top -> stamps.filter { it < top }.maxOrNull() }
+        newCursor?.let { preferences.setLastFeedSync(it.toMicros()) }
         Log.d(TAG, "Sincronizare feed: ${docs.size} documente citite, $saved salvate în cache")
     }
 
     override suspend fun syncBookmarks() {
         ensureOnline()
-        val docs = userCollection(FirestorePaths.BOOKMARKS).get().await().documents
+        val docs = userCollection(FirestorePaths.BOOKMARKS).get(Source.SERVER).await().documents
         val saved = upsertKeepingLocalState(docs.mapNotNull { it.toNewsArticleOrNull(isBookmarked = true) }, serverBookmarksWin = true)
         Log.d(TAG, "Sincronizare favorite: $saved articole")
     }
@@ -231,11 +250,10 @@ class NewsRepositoryImpl @Inject constructor(
             val ref = userCollection(FirestorePaths.BOOKMARKS).document(articleId)
             if (bookmarked) {
                 val article = newsDao.getArticleById(articleId)?.toDomain() ?: return false
-                ref.set(article.toBookmarkData()).await()
+                awaitWrite { ref.set(article.toBookmarkData()) }
             } else {
-                ref.delete().await()
+                awaitWrite { ref.delete() }
             }
-            true
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -249,6 +267,9 @@ class NewsRepositoryImpl @Inject constructor(
 
     override suspend fun getArticleById(id: String): NewsArticle? =
         newsDao.getArticleById(id)?.toDomain()
+
+    override fun observeArticle(id: String): Flow<NewsArticle?> =
+        newsDao.observeArticleById(id).map { it?.toDomain() }.distinctUntilChanged()
 
     override suspend fun clearOldCache(daysOld: Int) {
         val cutoffTime = System.currentTimeMillis() - (daysOld * 24 * 60 * 60 * 1000L)
@@ -265,21 +286,45 @@ class NewsRepositoryImpl @Inject constructor(
      */
     private suspend fun upsertKeepingLocalState(articles: List<NewsArticle>, serverBookmarksWin: Boolean): Int {
         if (articles.isEmpty()) return 0
-        val existing = newsDao.getArticlesByIds(articles.map { it.id }).associateBy { it.id }
-        val entities = articles.map { article ->
-            val local = existing[article.id]
-            article.copy(
-                isRead = local?.isRead ?: false,
-                isBookmarked = if (serverBookmarksWin || local == null) article.isBookmarked else local.isBookmarked,
-                userVote = local?.userVote,
-                deepDive = article.deepDive ?: local?.deepDive,
-                // Copiile din favorite nu au contoare: păstrăm valorile venite din `articles`.
-                upvotes = if (serverBookmarksWin) local?.upvotes ?: 0 else article.upvotes,
-                downvotes = if (serverBookmarksWin) local?.downvotes ?: 0 else article.downvotes
-            ).toEntity()
+        // Citire + scriere în aceeași tranzacție: un „citit” / „salvat” apăsat în timpul
+        // sincronizării nu mai poate fi suprascris cu starea veche.
+        return database.withTransaction {
+            val existing = newsDao.getArticlesByIds(articles.map { it.id }).associateBy { it.id }
+            val entities = articles.map { article ->
+                val local = existing[article.id]
+                // Copia din favorite e „înghețată” la momentul salvării: dacă local avem deja
+                // analiza AI (venită ulterior prin feed), o păstrăm pe cea locală.
+                val base = if (serverBookmarksWin && local?.aiSummary != null && article.aiSummary == null) {
+                    local.toDomain()
+                } else {
+                    article
+                }
+                base.copy(
+                    isRead = local?.isRead ?: false,
+                    isBookmarked = if (serverBookmarksWin || local == null) article.isBookmarked else local.isBookmarked,
+                    userVote = local?.userVote,
+                    deepDive = base.deepDive ?: local?.deepDive,
+                    // Copiile din favorite nu au contoare: păstrăm valorile venite din `articles`.
+                    upvotes = if (serverBookmarksWin) local?.upvotes ?: 0 else article.upvotes,
+                    downvotes = if (serverBookmarksWin) local?.downvotes ?: 0 else article.downvotes
+                ).toEntity()
+            }
+            newsDao.insertAll(entities)
+            entities.size
         }
-        newsDao.insertAll(entities)
-        return entities.size
+    }
+
+    /**
+     * Așteaptă confirmarea unei scrieri Firestore, cu limită de timp: offline, `await()` nu se
+     * termină niciodată. @return false dacă dispozitivul e offline sau serverul nu a confirmat
+     * (scrierea rămâne în coada Firestore și pleacă la revenirea rețelei, cât timp aplicația rulează).
+     */
+    private suspend fun awaitWrite(write: () -> Task<Void>): Boolean {
+        if (!networkMonitor.isCurrentlyOnline()) {
+            write()
+            return false
+        }
+        return withTimeoutOrNull(WRITE_TIMEOUT_MS) { write().await(); true } ?: false
     }
 
     private suspend fun fetchLocalArticles(city: String, country: String): List<NewsArticle> {
@@ -327,6 +372,7 @@ class NewsRepositoryImpl @Inject constructor(
         const val INITIAL_LIMIT = 200L
         const val PAGE_SIZE = 200L
         const val MAX_PAGES = 3
+        const val WRITE_TIMEOUT_MS = 10_000L
         /** Câte știri locale noi se rezumă per sincronizare (cota gratuită Gemini: ~3 cereri / sincronizare). */
         const val MAX_LOCAL_ENRICH_PER_SYNC = 12
 

@@ -203,12 +203,15 @@ class FeedViewModel @Inject constructor(
         // feed-ul local imediat și pornește o sincronizare.
         viewModelScope.launch {
             preferencesRepository.userPreferences
-                .map { prefs -> prefs.selectedCategories.ifEmpty { Category.allSlugs } to prefs.defaultMinutes }
+                .map { prefs -> Category.effective(prefs.selectedCategories) to prefs.defaultMinutes }
                 .distinctUntilChanged()
                 .collect { (selected, minutes) ->
                     _uiState.update { it.copy(selectedMinutes = minutes, selectedCategories = selected) }
+                    // Sincronizarea aduce toate categoriile (Room filtrează local), deci doar prima
+                    // emisie pornește una; schimbarea categoriilor / timpului nu mai costă citiri.
+                    val firstEmission = categories.value == null
                     categories.value = selected
-                    loadNews()
+                    if (firstEmission) loadNews()
                 }
         }
 
@@ -366,8 +369,10 @@ class FeedViewModel @Inject constructor(
         try {
             marketRepository.observeMarketPulse().collect { pulse ->
                 val offline = _uiState.value.isOffline
+                val ratesChanged = _uiState.value.marketPulse?.rates != pulse.rates
                 _uiState.update { it.copy(marketPulse = pulse, marketPulseStale = offline) }
-                if (!_uiState.value.marketWidget.isLoading) loadMarketHistory()
+                // Graficul depinde de cursuri, nu de bannerul de știri.
+                if (ratesChanged && !_uiState.value.marketWidget.isLoading) loadMarketHistory()
             }
         } catch (e: CancellationException) {
             throw e
@@ -477,11 +482,10 @@ class FeedViewModel @Inject constructor(
     /** Chip-ul „Trending azi” (filtru local, fără citiri din Firestore). */
     fun toggleTrending() = setFilter(trending = !trendingOnly.value, local = false)
 
-    /** Schimbă timpul de lectură și resincronizează. */
+    /** Schimbă timpul de lectură (filtru local; nu cere date noi de la server). */
     fun onTimeChanged(newMinutes: Int) {
         if (_uiState.value.selectedMinutes == newMinutes) return
         _uiState.update { it.copy(selectedMinutes = newMinutes) }
-        loadNews()
     }
 
     /**

@@ -4,8 +4,11 @@ import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import ro.newsfilter.app.core.audio.NewsAudioPlayer
 import ro.newsfilter.app.data.local.dao.NewsDao
 import ro.newsfilter.app.data.preferences.UserPreferencesRepository
 import ro.newsfilter.app.domain.model.User
@@ -30,7 +33,8 @@ import javax.inject.Singleton
 class SessionManager @Inject constructor(
     private val auth: FirebaseAuth,
     private val preferences: UserPreferencesRepository,
-    private val newsDao: NewsDao
+    private val newsDao: NewsDao,
+    private val audioPlayer: NewsAudioPlayer
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var started = false
@@ -45,9 +49,11 @@ class SessionManager @Inject constructor(
         // Firebase restaurează utilizatorul sincron, de pe disc. Fără utilizator → nicio dată
         // personală nu trebuie să rămână (inclusiv cache-ul unei sesiuni n8n din versiunea veche).
         if (auth.currentUser == null) scope.launch { clearLocalData() }
-        auth.addAuthStateListener { firebaseAuth ->
-            val user = firebaseAuth.currentUser
+        auth.addAuthStateListener {
             scope.launch {
+                // Starea se citește aici, nu la momentul callback-ului: după o deconectare urmată
+                // rapid de o autentificare, un callback vechi „user == null” nu mai șterge sesiunea nouă.
+                val user = auth.currentUser
                 val savedUid = preferences.firebaseUid()
                 if (user == null && savedUid != null) {
                     Log.w(TAG, "Sesiunea Firebase nu mai există — deconectare")
@@ -71,9 +77,15 @@ class SessionManager @Inject constructor(
         clearLocalData()
     }
 
-    private suspend fun clearLocalData() {
-        preferences.clearSession()
+    /**
+     * NonCancellable: ștergerea `isLoggedIn` închide `MainActivity` (și scope-ul ViewModel-ului
+     * care a cerut deconectarea), deci curățarea trebuie să se termine oricum. Room se golește
+     * înaintea DataStore, ca UI-ul să nu mai apuce să afișeze datele contului care pleacă.
+     */
+    private suspend fun clearLocalData() = withContext(NonCancellable) {
+        if (audioPlayer.state.value.isVisible) withContext(Dispatchers.Main) { audioPlayer.stop() }
         newsDao.clearAll()
+        preferences.clearSession()
     }
 
     private companion object {

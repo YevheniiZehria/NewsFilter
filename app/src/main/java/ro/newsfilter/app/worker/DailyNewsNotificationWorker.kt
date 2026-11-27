@@ -45,7 +45,7 @@ class DailyNewsNotificationWorker @AssistedInject constructor(
                 return Result.success()
             }
 
-            val categories = prefs.selectedCategories.ifEmpty { Category.allSlugs }
+            val categories = Category.effective(prefs.selectedCategories)
 
             // Încercăm întâi o sincronizare; dacă rețeaua lipsește, notificarea folosește
             // știrile deja salvate local (offline-first).

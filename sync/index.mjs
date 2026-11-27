@@ -33,12 +33,21 @@ const MAX_AI_PER_RUN = 30;                // articole trimise la Gemini / rulare
 const MAX_AI_ATTEMPTS = 3;                // după atâtea eșecuri articolul rămâne cu rezumatul RSS
 
 const now = Date.now();
+if (!DRY_RUN && !GEMINI_API_KEY) {
+  console.warn('Atenție: lipsește GEMINI_API_KEY — articolele se salvează fără rezumat AI (în română).');
+}
 const db = DRY_RUN ? null : initFirestore();
 
 function initFirestore() {
   const raw = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!raw) throw new Error('Lipsește FIREBASE_SERVICE_ACCOUNT (JSON-ul cheii contului de serviciu).');
-  initializeApp({ credential: cert(JSON.parse(raw)) });
+  let account;
+  try {
+    account = JSON.parse(raw);
+  } catch {
+    throw new Error('FIREBASE_SERVICE_ACCOUNT nu este JSON valid: lipește tot conținutul fișierului cheii, inclusiv acoladele.');
+  }
+  initializeApp({ credential: cert(account) });
   return getFirestore();
 }
 
@@ -66,7 +75,9 @@ const previousPoint = (points) => (points || []).filter((p) => p.t < Math.floor(
 
 /** @returns [{ pair, rate, previous }] pentru alertele de mișcare bruscă */
 async function syncMarket(state) {
-  const rates = await fetchMarketRates(state, now);
+  // Ciornă: momentele descărcării istoricului lung se salvează doar dacă scrierea reușește.
+  const draft = { ...state };
+  const rates = await fetchMarketRates(draft, now);
   if (rates.length === 0) return [];
   const updatedAt = new Date(now).toISOString();
 
@@ -99,12 +110,17 @@ async function syncMarket(state) {
   }
 
   await commitAll(ops);
+  Object.assign(state, draft);
   console.log(`Cursuri salvate: ${rates.map((r) => r.pair).join(', ')}`);
   return rates.map((r, i) => ({ pair: r.pair, rate: r.rate, previous: previousPoint(intradaySnaps[i].data()?.points) }));
 }
 
 // ---------------------------------------------------------------- Știri
-async function syncNews(index) {
+/** @return { index, aiQueue }: indexul actualizat, doar după ce articolele au fost scrise (altfel aruncă eroare). */
+async function syncNews(current) {
+  // Copie: dacă scrierea eșuează, `meta/index` rămâne cel vechi (articolele se reîncearcă).
+  const index = { ...current };
+  const isAlive = (v) => Date.parse(v.p) >= now - ARTICLE_TTL_MS;
   const feed = await fetchAllFeeds();
   const fresh = feed
     .filter((a) => !index[a.id] && Date.parse(a.publishedAt) > now - ARTICLE_TTL_MS)
@@ -125,10 +141,13 @@ async function syncNews(index) {
   // Lista pentru Gemini: întâi articolele noi, apoi cele vechi rămase neprocesate (reîncercări).
   let aiQueue = [];
   let retries = [];
+  let attempted = new Set();
   if (GEMINI_API_KEY) {
     aiQueue = fresh.slice(0, MAX_AI_PER_RUN);
+    // Cele mai noi întâi; fără cele care expiră în mai puțin de o zi.
     const retryIds = Object.entries(index)
-      .filter(([, v]) => !v.ai && (v.n || 0) < MAX_AI_ATTEMPTS)
+      .filter(([, v]) => !v.ai && (v.n || 0) < MAX_AI_ATTEMPTS && Date.parse(v.p) > now - ARTICLE_TTL_MS + DAY_MS)
+      .sort(([, a], [, b]) => String(b.p).localeCompare(String(a.p)))
       .map(([id]) => id)
       .slice(0, MAX_AI_PER_RUN - aiQueue.length);
     if (db && retryIds.length) {
@@ -138,8 +157,9 @@ async function syncNews(index) {
       for (const id of retryIds) if (!retries.some((r) => r.id === id)) delete index[id];
     }
     aiQueue = aiQueue.concat(retries);
-    const ok = await digestArticles(GEMINI_API_KEY, aiQueue);
-    console.log(`Gemini: ${ok}/${aiQueue.length} articole procesate`);
+    const result = await digestArticles(GEMINI_API_KEY, aiQueue);
+    attempted = result.attempted;
+    console.log(`Gemini: ${result.ok}/${aiQueue.length} articole procesate`);
   }
 
   const ops = [];
@@ -152,16 +172,17 @@ async function syncNews(index) {
     aiProcessed: true, updatedAt: FieldValue.serverTimestamp()
   });
   for (const a of fresh) {
-    index[a.id] = { p: a.publishedAt, ai: a.aiProcessed, n: aiQueue.includes(a) ? 1 : 0 };
+    index[a.id] = { p: a.publishedAt, ai: a.aiProcessed, n: attempted.has(a) ? 1 : 0 };
     if (db) ops.push((b) => b.set(db.doc(`articles/${a.id}`), toDoc(a)));
   }
   for (const a of retries) {
-    index[a.id] = { ...index[a.id], ai: a.aiProcessed, n: (index[a.id]?.n || 0) + 1 };
+    index[a.id] = { ...index[a.id], ai: a.aiProcessed, n: (index[a.id]?.n || 0) + (attempted.has(a) ? 1 : 0) };
     if (db && a.aiProcessed) ops.push((b) => b.set(db.doc(`articles/${a.id}`), toAiPatch(a), { merge: true }));
   }
 
   // Curățare: articole mai vechi de 14 zile.
-  const expired = Object.entries(index).filter(([, v]) => Date.parse(v.p) < now - ARTICLE_TTL_MS).map(([id]) => id);
+  // Dată lipsă / invalidă → tratată ca expirată (altfel intrarea n-ar mai fi ștearsă niciodată).
+  const expired = Object.entries(index).filter(([, v]) => !isAlive(v)).map(([id]) => id);
   for (const id of expired) {
     delete index[id];
     if (db) ops.push((b) => b.delete(db.doc(`articles/${id}`)));
@@ -174,18 +195,21 @@ async function syncNews(index) {
     for (const a of fresh.slice(0, 5)) {
       console.log(`  [${a.category}] ${a.title} — ${a.readTimeMinutes} min, text complet: ${a.fullContent ? a.fullContent.length + ' caractere' : 'nu'}`);
     }
+    const perCategory = {};
+    for (const a of feed) perCategory[a.category] = (perCategory[a.category] || 0) + 1;
+    console.log(`  Pe categorii: ${JSON.stringify(perCategory)}`);
     // Structura promptului Gemini (fără apel): primele 2 articole, conținut scurtat.
     if (fresh.length) {
       const sample = fresh.slice(0, 2).map((a) => ({ ...a, fullContent: (a.fullContent || a.summary || '').slice(0, 160) + '…' }));
       console.log(`\n--- Prompt Gemini (dry-run, exemplu) ---\n${buildPrompt(sample)}\n--- sfârșit prompt ---`);
     }
   }
-  return aiQueue;
+  return { index, aiQueue };
 }
 
 // ---------------------------------------------------------------- Main
 const state = await readDoc('meta/sync');
-const index = (await readDoc('meta/index')).articles || {};
+let index = (await readDoc('meta/index')).articles || {};
 let failed = false;
 const alerts = [];
 
@@ -196,7 +220,9 @@ try {
   console.error('Eroare cursuri valutare:', e);
 }
 try {
-  const alert = newsAlert(await syncNews(index));
+  const news = await syncNews(index);
+  index = news.index;
+  const alert = newsAlert(news.aiQueue);
   if (alert) alerts.push(alert);
 } catch (e) {
   failed = true;
