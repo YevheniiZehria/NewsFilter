@@ -33,7 +33,7 @@ interface NewsRepository {
      */
     suspend fun requestDeepDive(articleId: String): String
 
-    /** Salvează votul (like/dislike) în `users/{uid}/votes`. Best effort, nu aruncă. */
+    /** Salvează votul (like/dislike) în `users/{uid}/votes`. Aruncă excepția dacă scrierea eșuează. */
     suspend fun sendFeedback(articleId: String, isPositive: Boolean)
 
     /** Salvează local votul, ca starea Like / Dislike să fie reținută la redeschidere. */

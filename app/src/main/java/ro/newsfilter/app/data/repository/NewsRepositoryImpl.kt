@@ -113,7 +113,9 @@ class NewsRepositoryImpl @Inject constructor(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            Log.w(TAG, "Votul nu a putut fi salvat în Firestore: ${e.message}")
+            // Nu mai ascundem eroarea: ViewModel-ul o afișează utilizatorului.
+            Log.w(TAG, "Votul nu a putut fi salvat în Firestore", e)
+            throw e
         }
     }
 

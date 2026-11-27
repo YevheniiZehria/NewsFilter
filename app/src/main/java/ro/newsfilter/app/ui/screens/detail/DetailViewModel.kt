@@ -112,7 +112,13 @@ class DetailViewModel @Inject constructor(
         }
         viewModelScope.launch {
             newsRepository.setUserVote(articleId, isPositive)
-            newsRepository.sendFeedback(articleId, isPositive)
+            try {
+                newsRepository.sendFeedback(articleId, isPositive)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _messages.send("Votul a fost salvat doar pe acest dispozitiv: ${e.toUserMessage()}")
+            }
         }
     }
 
