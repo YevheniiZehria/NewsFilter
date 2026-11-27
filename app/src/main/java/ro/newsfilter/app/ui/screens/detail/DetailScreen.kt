@@ -85,6 +85,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ro.newsfilter.app.core.util.ArticleIntents
+import ro.newsfilter.app.core.util.PublishedDate
 import ro.newsfilter.app.domain.model.Category
 import ro.newsfilter.app.domain.model.NewsArticle
 import ro.newsfilter.app.ui.components.ArticleImage
@@ -260,6 +261,16 @@ private fun ArticleContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     ReadTimeLabel(minutes = article.readTimeMinutes, suffix = "min de lectură")
+                }
+
+                // Data și ora exactă a publicării (ex. „Vineri, 27 noiembrie 2026, ora 09:14”).
+                PublishedDate.long(article.publishedAt)?.let { published ->
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(
+                        text = "Publicat: $published",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(20.dp))

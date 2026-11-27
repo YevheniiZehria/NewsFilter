@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import ro.newsfilter.app.core.util.PublishedDate
 import ro.newsfilter.app.domain.model.MarketSentiment
 import ro.newsfilter.app.domain.model.NewsArticle
 
@@ -69,7 +70,7 @@ private val ThumbnailShape = RoundedCornerShape(14.dp)
  * pagină a unei reviste:
  *  - imagine 16:9 sus, cu pastila de categorie translucidă peste ea;
  *  - titlu mare (max. 3 rânduri);
- *  - rând de metadate: sursă • timp de citire • pastila de piață + buton de salvare.
+ *  - rând de metadate: sursă • data și ora publicării • timp de citire • pastila de piață + salvare.
  *
  * Evenimente: atingere → detaliu; apăsare lungă → meniu contextual (cu vibrație).
  */
@@ -215,6 +216,7 @@ fun CompactNewsCard(
                 .padding(start = 16.dp, end = 4.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            PublishedLabel(publishedAt = article.publishedAt, modifier = Modifier.padding(end = 10.dp))
             ReadTimeLabel(minutes = article.readTimeMinutes)
             MarketImpactPill(
                 article = article,
@@ -289,6 +291,7 @@ private fun MetaRow(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        PublishedLabel(publishedAt = article.publishedAt, modifier = Modifier.padding(end = 10.dp))
         ReadTimeLabel(minutes = article.readTimeMinutes)
         MarketImpactPill(
             article = article,
@@ -363,6 +366,22 @@ private fun MarketImpactNote(article: NewsArticle, visible: Boolean, modifier: M
             )
         }
     }
+}
+
+/**
+ * Data și ora publicării, scurt și în română („azi, 09:14” / „27 nov., 09:14”).
+ * Nu afișează nimic dacă data lipsește sau nu poate fi citită.
+ */
+@Composable
+fun PublishedLabel(publishedAt: String, modifier: Modifier = Modifier) {
+    val label = PublishedDate.short(publishedAt) ?: return
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        modifier = modifier
+    )
 }
 
 /** Timp de citire discret: iconiță ceas + „X min”. */
