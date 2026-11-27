@@ -5,18 +5,22 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import ro.newsfilter.app.core.audio.NewsAudioPlayer
 import ro.newsfilter.app.core.network.toUserMessage
@@ -51,6 +55,8 @@ data class FeedUiState(
     val isServerRefreshRunning: Boolean = false,
     val selectedMinutes: Int = 5,
     val selectedCategories: List<String> = emptyList(),
+    /** Chip-ul „Trending azi”: lista arată știrile de azi cele mai votate, în locul feed-ului. */
+    val trendingOnly: Boolean = false,
     val totalReadTimeMinutes: Int = 0,
     val error: String? = null,
     /** Prenumele utilizatorului autentificat, pentru salutul personalizat. */
@@ -62,11 +68,22 @@ data class FeedUiState(
     /** Ultima actualizare Market Pulse a eșuat (offline / eroare) → afișăm „neactualizat”. */
     val marketPulseStale: Boolean = false,
     /** Widget-ul valutar din capul Feed-ului (pereche, direcție, interval, istoric). */
-    val marketWidget: MarketWidgetState = MarketWidgetState()
+    val marketWidget: MarketWidgetState = MarketWidgetState(),
+    /** Textul din bara de căutare (filtrare în timp real în Room). */
+    val searchQuery: String = "",
+    /** Chip-ul „📍” este selectat: se afișează doar știrile locale. */
+    val localOnly: Boolean = false,
+    /** Eticheta locației (orașul, sau țara dacă orașul lipsește); gol = nesetată. */
+    val localLabel: String = "",
+    /** Există un oraș / o țară setate în Setări. */
+    val hasLocalNews: Boolean = false,
+    /** Descărcarea știrilor locale (Google News RSS) este în curs. */
+    val isLocalSyncing: Boolean = false
 ) {
     /** Shimmer doar când nu avem nimic de afișat încă (cache gol și sincronizare în curs). */
     val isLoading: Boolean
-        get() = !cacheLoaded || (articles.isEmpty() && isSyncing)
+        get() = !cacheLoaded ||
+            (articles.isEmpty() && searchQuery.isBlank() && (if (localOnly) isLocalSyncing else isSyncing))
 }
 
 /**
@@ -94,6 +111,9 @@ data class MarketWidgetState(
     val displayHistory: MarketHistory? get() = if (inverted) history?.inverted() else history
 }
 
+/** Ce interogare Room alimentează lista Feed-ului (categorii / 📍, text căutat, Trending). */
+private data class FeedSource(val categories: List<String>, val query: String, val trending: Boolean)
+
 /** Unde se deschide știrea din bannerul Market Pulse. */
 sealed interface MarketEventTarget {
     /** Articolul există în cache-ul Room → ecranul de detaliu. */
@@ -118,7 +138,7 @@ sealed interface MarketEventTarget {
  *    (sursele sunt procesate automat la 30 de minute de jobul de sincronizare).
  * 5. Mesajele (Snackbar) sunt emise o singură dată prin [messages] (Channel).
  */
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, FlowPreview::class)
 @HiltViewModel
 class FeedViewModel @Inject constructor(
     private val newsRepository: NewsRepository,
@@ -146,7 +166,14 @@ class FeedViewModel @Inject constructor(
     val marketEventTargets: Flow<MarketEventTarget> = _marketEventTargets.receiveAsFlow()
 
     private val categories = MutableStateFlow<List<String>?>(null)
+    private val searchQuery = MutableStateFlow("")
+    /** Chip-urile „🔥 Trending azi” și „📍 Oraș” se exclud reciproc („Toate” = niciunul). */
+    private val trendingOnly = MutableStateFlow(false)
+    private val localOnly = MutableStateFlow(false)
+    /** Orașul / țara din Setări pentru știrile locale. */
+    private var localLocation = "" to ""
     private var syncJob: Job? = null
+    private var localJob: Job? = null
     private var chartJob: Job? = null
 
     init {
@@ -176,19 +203,57 @@ class FeedViewModel @Inject constructor(
         // feed-ul local imediat și pornește o sincronizare.
         viewModelScope.launch {
             preferencesRepository.userPreferences
-                .map { prefs -> prefs.selectedCategories.ifEmpty { Category.allSlugs } to prefs.defaultMinutes }
+                .map { prefs -> Category.effective(prefs.selectedCategories) to prefs.defaultMinutes }
                 .distinctUntilChanged()
                 .collect { (selected, minutes) ->
                     _uiState.update { it.copy(selectedMinutes = minutes, selectedCategories = selected) }
+                    // Sincronizarea aduce toate categoriile (Room filtrează local), deci doar prima
+                    // emisie pornește una; schimbarea categoriilor / timpului nu mai costă citiri.
+                    val firstEmission = categories.value == null
                     categories.value = selected
-                    loadNews()
+                    if (firstEmission) loadNews()
                 }
         }
 
-        // Sursa unică de adevăr pentru listă: cache-ul Room.
+        // Locația pentru știrile locale: la schimbare (și la pornire) descarcă știrile noi.
         viewModelScope.launch {
-            categories.filterNotNull()
-                .flatMapLatest { newsRepository.observeFeed(it) }
+            preferencesRepository.userPreferences
+                .map { it.localCity.trim() to it.localCountry.trim() }
+                .distinctUntilChanged()
+                .collect { (city, country) ->
+                    localLocation = city to country
+                    val hasLocation = city.isNotBlank() || country.isNotBlank()
+                    if (!hasLocation) localOnly.value = false
+                    _uiState.update {
+                        it.copy(
+                            localLabel = city.ifBlank { country },
+                            hasLocalNews = hasLocation,
+                            localOnly = it.localOnly && hasLocation
+                        )
+                    }
+                    syncLocalNews()
+                }
+        }
+
+        // Sursa unică de adevăr pentru listă: cache-ul Room — feed-ul personal, „Trending azi” sau
+        // „📍” — filtrat după textul căutat (cu debounce, ca interogarea să nu ruleze la fiecare tastă).
+        viewModelScope.launch {
+            combine(
+                categories.filterNotNull(),
+                searchQuery
+                    .debounce { if (it.isBlank()) 0L else SEARCH_DEBOUNCE_MS }
+                    .map { it.trim().escapeLike() }
+                    .distinctUntilChanged(),
+                trendingOnly,
+                localOnly
+            ) { selected, query, trending, local ->
+                FeedSource(if (local) listOf(Category.LOCAL.slug) else selected, query, trending && !local)
+            }
+                .distinctUntilChanged()
+                .flatMapLatest { source ->
+                    if (source.trending) newsRepository.observeTrending(source.query)
+                    else newsRepository.observeFeed(source.categories, source.query)
+                }
                 .collect { articles ->
                     _uiState.update {
                         it.copy(
@@ -219,6 +284,7 @@ class FeedViewModel @Inject constructor(
      */
     fun loadNews(isRefresh: Boolean = false) {
         if (isRefresh) refreshMarketPulse()
+        syncLocalNews(isRefresh)
         val selected = categories.value ?: return
         syncJob?.cancel()
         syncJob = viewModelScope.launch {
@@ -244,6 +310,56 @@ class FeedViewModel @Inject constructor(
     }
 
     /**
+     * Știrile locale (Google News RSS) pentru locația din Setări. Erorile nu înlocuiesc feed-ul:
+     * cache-ul rămâne, iar mesajul apare doar la reîmprospătare manuală cu chip-ul „📍” activ.
+     */
+    private fun syncLocalNews(isRefresh: Boolean = false) {
+        val (city, country) = localLocation
+        if (city.isBlank() && country.isBlank()) return
+        localJob?.cancel()
+        localJob = viewModelScope.launch {
+            val self = coroutineContext.job
+            _uiState.update { it.copy(isLocalSyncing = true) }
+            try {
+                newsRepository.syncLocalNews(city, country)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                val state = _uiState.value
+                if (isRefresh && state.localOnly && !state.isOffline) {
+                    _messages.send("Nu am putut actualiza știrile locale: ${e.toUserMessage()}")
+                }
+            } finally {
+                // Un job anulat nu resetează indicatorul jobului care l-a înlocuit.
+                if (localJob === self) _uiState.update { it.copy(isLocalSyncing = false) }
+            }
+        }
+    }
+
+    /** Bara de căutare: filtrează lista în timp real (case-insensitive pentru literele ASCII). */
+    fun onSearchQueryChange(query: String) {
+        searchQuery.value = query
+        _uiState.update { it.copy(searchQuery = query) }
+    }
+
+    fun clearSearch() = onSearchQueryChange("")
+
+    /** Chip-urile „Toate” / „📍 Oraș”. Fără locație setată, chip-ul local nu se poate selecta. */
+    fun selectLocal(local: Boolean) {
+        if (local && !_uiState.value.hasLocalNews) return
+        setFilter(trending = false, local = local)
+    }
+
+    /** Chip-ul „Toate”: feed-ul personal, fără Trending / 📍. */
+    fun selectAll() = setFilter(trending = false, local = false)
+
+    private fun setFilter(trending: Boolean, local: Boolean) {
+        trendingOnly.value = trending
+        localOnly.value = local
+        _uiState.update { it.copy(trendingOnly = trending, localOnly = local) }
+    }
+
+    /**
      * Market Pulse în timp real: ascultă cursurile din Firestore cât timp este apelată
      * (FeedScreen o rulează doar cât ecranul este vizibil — STARTED — și o anulează apoi).
      * Fiecare actualizare a cursurilor reîmprospătează și graficul. Erorile nu se afișează:
@@ -253,8 +369,10 @@ class FeedViewModel @Inject constructor(
         try {
             marketRepository.observeMarketPulse().collect { pulse ->
                 val offline = _uiState.value.isOffline
+                val ratesChanged = _uiState.value.marketPulse?.rates != pulse.rates
                 _uiState.update { it.copy(marketPulse = pulse, marketPulseStale = offline) }
-                if (!_uiState.value.marketWidget.isLoading) loadMarketHistory()
+                // Graficul depinde de cursuri, nu de bannerul de știri.
+                if (ratesChanged && !_uiState.value.marketWidget.isLoading) loadMarketHistory()
             }
         } catch (e: CancellationException) {
             throw e
@@ -361,11 +479,13 @@ class FeedViewModel @Inject constructor(
         }
     }
 
-    /** Schimbă timpul de lectură și resincronizează. */
+    /** Chip-ul „Trending azi” (filtru local, fără citiri din Firestore). */
+    fun toggleTrending() = setFilter(trending = !trendingOnly.value, local = false)
+
+    /** Schimbă timpul de lectură (filtru local; nu cere date noi de la server). */
     fun onTimeChanged(newMinutes: Int) {
         if (_uiState.value.selectedMinutes == newMinutes) return
         _uiState.update { it.copy(selectedMinutes = newMinutes) }
-        loadNews()
     }
 
     /**
@@ -466,5 +586,13 @@ class FeedViewModel @Inject constructor(
     fun logout() {
         audioPlayer.stop()
         viewModelScope.launch { authRepository.logout() }
+    }
+
+    private companion object {
+        const val SEARCH_DEBOUNCE_MS = 250L
+
+        /** Escapează caracterele speciale LIKE (`\`, `%`, `_`) pentru `ESCAPE '\'` din `NewsDao.observeFeed`. */
+        fun String.escapeLike(): String =
+            replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     }
 }

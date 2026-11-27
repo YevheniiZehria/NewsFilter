@@ -18,11 +18,13 @@ import ro.newsfilter.app.data.local.entity.NewsEntity
  *  - v3 = textul integral și rezumatul AI;
  *  - v4 = Smart Digest (idei cheie + etichete) și analiza „Aprofundează”;
  *  - v5 = Market Pulse (perechea valutară influențată, direcția și nota AI).
+ *  - v6 = titlul tradus în română de AI (ai_title);
+ *  - v7 = voturile comunității (upvotes / downvotes).
  * exportSchema = true păstrează istoricul schemelor în app/schemas.
  */
 @Database(
     entities = [NewsEntity::class],
-    version = 5,
+    version = 7,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -59,6 +61,21 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE news ADD COLUMN affected_currency TEXT")
                 db.execSQL("ALTER TABLE news ADD COLUMN market_sentiment TEXT")
                 db.execSQL("ALTER TABLE news ADD COLUMN market_impact_note TEXT")
+            }
+        }
+
+        /** Adaugă titlul tradus în română (Gemini). */
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE news ADD COLUMN ai_title TEXT")
+            }
+        }
+
+        /** Adaugă contoarele voturilor comunității (Trending, procentul „util”, sentimentul pieței). */
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE news ADD COLUMN upvotes INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE news ADD COLUMN downvotes INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

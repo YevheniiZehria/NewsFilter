@@ -15,8 +15,17 @@ import ro.newsfilter.app.domain.model.NewsArticle
  */
 interface NewsRepository {
 
-    /** Feed-ul local: articole necitite din [categories], cele mai noi primele. */
-    fun observeFeed(categories: List<String>): Flow<List<NewsArticle>>
+    /**
+     * Feed-ul local: articole necitite din [categories], cele mai noi primele,
+     * filtrate după textul [query] (gol = fără căutare).
+     */
+    fun observeFeed(categories: List<String>, query: String = ""): Flow<List<NewsArticle>>
+
+    /**
+     * Știri locale: descarcă de pe dispozitiv (Google News RSS) știrile pentru [city] / [country]
+     * și le salvează în cache cu categoria `local`. Nu face nimic dacă ambele sunt goale.
+     */
+    suspend fun syncLocalNews(city: String, country: String)
 
     /**
      * Descarcă din Firestore știrile noi / actualizate de la ultima sincronizare (incremental)
@@ -33,11 +42,15 @@ interface NewsRepository {
      */
     suspend fun requestDeepDive(articleId: String): String
 
-    /** Salvează votul (like/dislike) în `users/{uid}/votes`. Best effort, nu aruncă. */
-    suspend fun sendFeedback(articleId: String, isPositive: Boolean)
+    /**
+     * Votul utilizatorului (true = util, false = nu, null = retras): local imediat (Room, inclusiv
+     * contoarele comunității), apoi în Firestore — votul + contoarele articolului într-un singur batch.
+     * @return true dacă Firestore a confirmat; false dacă nu (starea locală revine la votul anterior).
+     */
+    suspend fun setVote(articleId: String, isPositive: Boolean?): Boolean
 
-    /** Salvează local votul, ca starea Like / Dislike să fie reținută la redeschidere. */
-    suspend fun setUserVote(articleId: String, isPositive: Boolean?)
+    /** „Trending azi”: știrile de azi din cache, sortate după voturile pozitive, filtrate după [query]. */
+    fun observeTrending(query: String = ""): Flow<List<NewsArticle>>
 
     suspend fun markAsRead(articleId: String)
 
@@ -54,6 +67,9 @@ interface NewsRepository {
 
     /** Un articol individual din cache-ul local. */
     suspend fun getArticleById(id: String): NewsArticle?
+
+    /** Articolul din cache, observat (null = nu există / a fost șters). */
+    fun observeArticle(id: String): Flow<NewsArticle?>
 
     /** Șterge din cache articolele nesincronizate de [daysOld] zile (favoritele rămân). */
     suspend fun clearOldCache(daysOld: Int = 7)

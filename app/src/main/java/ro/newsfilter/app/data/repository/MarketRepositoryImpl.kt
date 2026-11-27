@@ -4,7 +4,11 @@ import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.tasks.await
 import ro.newsfilter.app.core.util.NetworkMonitor
 import ro.newsfilter.app.data.local.dao.NewsDao
@@ -12,6 +16,7 @@ import ro.newsfilter.app.data.local.entity.NewsEntity
 import ro.newsfilter.app.data.remote.firestore.FirestorePaths
 import ro.newsfilter.app.data.remote.firestore.toMarketPoints
 import ro.newsfilter.app.data.remote.firestore.toMarketRates
+import ro.newsfilter.app.domain.model.CommunitySentiment
 import ro.newsfilter.app.domain.model.MarketEvent
 import ro.newsfilter.app.domain.model.MarketHistory
 import ro.newsfilter.app.domain.model.MarketHistoryEvent
@@ -23,6 +28,7 @@ import ro.newsfilter.app.domain.model.MarketRate
 import ro.newsfilter.app.domain.model.MarketSentiment
 import ro.newsfilter.app.domain.repository.MarketRepository
 import java.io.IOException
+import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -55,9 +61,26 @@ class MarketRepositoryImpl @Inject constructor(
     private val historyCache = ConcurrentHashMap<String, MarketHistory>()
 
     override fun observeMarketPulse(): Flow<MarketPulse> =
-        combine(observeRates(), newsDao.observeLatestMarketEvent()) { rates, latest ->
-            MarketPulse(rates = rates, latestEvent = latest?.toMarketEventOrNull())
-        }
+        combine(
+            // Listener-ul se reconectează singur după o eroare (rețea, permisiuni temporare).
+            observeRates().retryWhen { _, attempt -> delay(RETRY_DELAY_MS * (attempt + 1).coerceAtMost(6)); true },
+            // Orice scriere în `news` (citit, favorit, sincronizare) re-emite interogarea:
+            // trecem mai departe doar când știrea de impact chiar s-a schimbat.
+            newsDao.observeLatestMarketEvent().map { it?.toMarketEventOrNull() }.distinctUntilChanged(),
+            newsDao.observeCommunitySentiment(Instant.now().minus(SENTIMENT_WINDOW).toString())
+                .distinctUntilChanged()
+        ) { rates, latest, counts ->
+            MarketPulse(
+                rates = rates,
+                latestEvent = latest,
+                communitySentiment = counts.groupBy { it.pair }.mapValues { (_, rows) ->
+                    CommunitySentiment(
+                        bullish = rows.filter { it.sentiment == MarketSentiment.UP.name }.sumOf { it.count },
+                        bearish = rows.filter { it.sentiment == MarketSentiment.DOWN.name }.sumOf { it.count }
+                    )
+                }
+            )
+        }.distinctUntilChanged()
 
     private fun observeRates(): Flow<List<MarketRate>> = callbackFlow {
         val registration = firestore.document(FirestorePaths.MARKET_PULSE)
@@ -164,6 +187,7 @@ class MarketRepositoryImpl @Inject constructor(
     }
 
     private companion object {
+        const val RETRY_DELAY_MS = 5_000L
         const val MINUTE_MS = 60_000L
         const val HOUR_MS = 60 * MINUTE_MS
         const val DAY_MS = 24 * HOUR_MS
@@ -171,6 +195,9 @@ class MarketRepositoryImpl @Inject constructor(
         const val LATEST_EVENT_WINDOW_MS = 48 * HOUR_MS
         const val MAX_EVENTS = 30
         const val MAX_EVENT_CANDIDATES = 200
+
+        /** Fereastra pentru sentimentul comunității (articolele trăiesc oricum max. 14 zile). */
+        val SENTIMENT_WINDOW: Duration = Duration.ofDays(7)
 
         /** Luni, 2000-01-03 00:00 UTC — originea găleților (ca în vechiul API: săptămânile încep lunea). */
         const val BUCKET_ORIGIN_MS = 946_857_600_000L

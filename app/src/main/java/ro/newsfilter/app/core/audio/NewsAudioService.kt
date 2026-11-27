@@ -140,10 +140,15 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
 
         engine.setSpeechRate(state.speechRate)
         val textToRead = buildString {
-            append(article.title)
+            append(article.displayTitle)
             append(". ")
-            if (article.summary.isNotBlank()) {
-                append(article.summary)
+            if (article.displaySummary.isNotBlank()) {
+                append(article.displaySummary)
+            }
+            // Smart Digest: ideile cheie, dacă există (feed-ul principal și știrile locale îmbogățite).
+            if (article.aiBullets.isNotEmpty()) {
+                append(" Pe scurt: ")
+                article.aiBullets.forEach { append(it.trimEnd('.', ' ')).append(". ") }
             }
         }
         engine.speak(textToRead, TextToSpeech.QUEUE_FLUSH, null, article.id)
@@ -177,7 +182,7 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
         } else {
             getString(R.string.app_name)
         }
-        val bodyText = article?.title ?: "Pachet audio pregătit"
+        val bodyText = article?.displayTitle ?: "Pachet audio pregătit"
 
         val builder = NotificationCompat.Builder(this, NewsFilterApp.AUDIO_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)

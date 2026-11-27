@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import android.util.Log
+import kotlinx.coroutines.CancellationException
+import ro.newsfilter.app.core.notifications.MarketAlerts
 import ro.newsfilter.app.data.preferences.UserPreferences
 import ro.newsfilter.app.data.preferences.UserPreferencesRepository
 import ro.newsfilter.app.core.sensor.ShakeDetector
@@ -54,7 +57,7 @@ class SettingsViewModel @Inject constructor(
             initialValue = loadedPreferences.value ?: UserPreferences()
         )
 
-    val allCategories = Category.entries
+    val allCategories = Category.selectable
 
     fun toggleCategory(slug: String) {
         val currentCategories = preferences.value.selectedCategories.toMutableSet()
@@ -96,6 +99,25 @@ class SettingsViewModel @Inject constructor(
     }
 
     /**
+     * Alertele de piață: preferința locală + abonarea la topicul FCM `market_alerts`.
+     * Dacă FCM nu răspunde (ex. offline), preferința revine la valoarea anterioară.
+     */
+    fun setMarketAlerts(enabled: Boolean, onFailure: () -> Unit = {}) {
+        viewModelScope.launch {
+            preferencesRepository.updateMarketAlerts(enabled)
+            try {
+                MarketAlerts.setSubscribed(enabled)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("SettingsViewModel", "Abonarea la alertele de piață a eșuat: ${e.message}")
+                preferencesRepository.updateMarketAlerts(!enabled)
+                onFailure()
+            }
+        }
+    }
+
+    /**
      * Salvează noua oră a notificării zilnice și, dacă notificarea e activă,
      * reprogramează imediat WorkManager-ul pentru ora aleasă.
      *
@@ -114,6 +136,13 @@ class SettingsViewModel @Inject constructor(
     fun setShakeToRefresh(enabled: Boolean) {
         viewModelScope.launch {
             preferencesRepository.updateShakeToRefresh(enabled)
+        }
+    }
+
+    /** Salvează locația pentru știrile locale; Feed-ul le descarcă automat la schimbare. */
+    fun setLocalNews(city: String, country: String) {
+        viewModelScope.launch {
+            preferencesRepository.updateLocalNews(city.trim(), country.trim())
         }
     }
 

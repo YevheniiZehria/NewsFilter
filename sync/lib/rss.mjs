@@ -1,5 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
-import { USER_AGENT, articleId, fetchWithTimeout } from './util.mjs';
+import { USER_AGENT, articleId, canonicalUrl, fetchWithTimeout } from './util.mjs';
 
 /** Feed-urile BBC și categoria (slug-ul din `Category.slug` din aplicație) fiecăruia. */
 export const FEEDS = [
@@ -8,7 +8,9 @@ export const FEEDS = [
   { category: 'sport', url: 'https://feeds.bbci.co.uk/sport/rss.xml' },
   { category: 'science', url: 'https://feeds.bbci.co.uk/news/science_and_environment/rss.xml' },
   { category: 'health', url: 'https://feeds.bbci.co.uk/news/health/rss.xml' },
-  { category: 'world', url: 'https://feeds.bbci.co.uk/news/world/rss.xml' }
+  { category: 'world', url: 'https://feeds.bbci.co.uk/news/world/rss.xml' },
+  { category: 'politics', url: 'https://feeds.bbci.co.uk/news/politics/rss.xml' },
+  { category: 'entertainment', url: 'https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml' }
 ];
 
 const BBC_IMAGE_PLACEHOLDER = 'https://news.bbcimg.co.uk/nol/shared/img/bbc_news_120x60.gif';
@@ -45,13 +47,16 @@ export async function fetchAllFeeds() {
       continue;
     }
     for (const item of r.value.items) {
-      const url = text(item.link || item.guid).trim();
-      if (!url || seen.has(url)) continue;
+      const rawUrl = text(item.link || item.guid).trim();
+      if (!rawUrl) continue;
+      const url = canonicalUrl(rawUrl);
+      if (seen.has(url)) continue;
       seen.add(url);
 
+      // Fără dată validă articolul ar primi „acum” la fiecare apariție și ar reveni după curățare.
+      const published = new Date(text(item.pubDate));
+      if (Number.isNaN(published.getTime())) continue;
       const description = stripTags(text(item.description));
-      const pubDate = text(item.pubDate);
-      const published = pubDate ? new Date(pubDate) : new Date();
       const image = item['media:thumbnail']?.['@_url'] || item.enclosure?.['@_url'] || null;
 
       articles.push({
@@ -63,7 +68,7 @@ export async function fetchAllFeeds() {
         articleUrl: url,
         readTimeMinutes: estimateReadTime(description),
         category: r.value.feed.category,
-        publishedAt: (Number.isNaN(published.getTime()) ? new Date() : published).toISOString(),
+        publishedAt: published.toISOString(),
         fullContent: null
       });
     }

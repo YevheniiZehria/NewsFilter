@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -6,6 +8,13 @@ plugins {
     alias(libs.plugins.hilt)
     alias(libs.plugins.google.services)
 }
+
+// Cheia Gemini pentru rezumatele știrilor locale: doar din local.properties (nu se versionează).
+// Lipsă → aplicația folosește rezumatul extractiv offline.
+val localProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val geminiApiKey: String = localProperties.getProperty("GEMINI_API_KEY", "").trim()
 
 android {
     namespace = "ro.newsfilter.app"
@@ -19,6 +28,8 @@ android {
         versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
     }
 
     buildTypes {
@@ -103,6 +114,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
     implementation(libs.firebase.firestore)
+    implementation(libs.firebase.messaging)
 
     // Google Sign-In prin Credential Manager
     implementation(libs.androidx.credentials)

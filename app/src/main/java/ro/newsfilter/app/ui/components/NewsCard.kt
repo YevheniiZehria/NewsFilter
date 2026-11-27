@@ -57,10 +57,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import ro.newsfilter.app.core.util.PublishedDate
 import ro.newsfilter.app.domain.model.MarketSentiment
 import ro.newsfilter.app.domain.model.NewsArticle
 
 private val HeroShape = RoundedCornerShape(20.dp)
+
+/** Indicator pentru articolele încă neprocesate de AI (titlu / rezumat în engleză). */
+private const val UNTRANSLATED_LABEL = "EN · traducere în curs"
 private val CompactShape = RoundedCornerShape(16.dp)
 private val ThumbnailShape = RoundedCornerShape(14.dp)
 
@@ -69,7 +73,7 @@ private val ThumbnailShape = RoundedCornerShape(14.dp)
  * pagină a unei reviste:
  *  - imagine 16:9 sus, cu pastila de categorie translucidă peste ea;
  *  - titlu mare (max. 3 rânduri);
- *  - rând de metadate: sursă • timp de citire • pastila de piață + buton de salvare.
+ *  - rând de metadate: sursă • data și ora publicării • timp de citire • pastila de piață + salvare.
  *
  * Evenimente: atingere → detaliu; apăsare lungă → meniu contextual (cu vibrație).
  */
@@ -110,15 +114,23 @@ fun HeroNewsCard(
 
         Column(modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 16.dp)) {
             Text(
-                text = article.title,
+                text = article.displayTitle,
                 style = MaterialTheme.typography.titleLarge,
                 color = titleColor(article),
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
+            if (article.needsTranslation) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = UNTRANSLATED_LABEL,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = article.summary,
+                text = article.displaySummary,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
@@ -179,7 +191,7 @@ fun CompactNewsCard(
                         maxLines = 1
                     )
                     Text(
-                        text = "  •  ${article.source}",
+                        text = "  •  ${article.source}" + if (article.needsTranslation) "  •  $UNTRANSLATED_LABEL" else "",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -188,7 +200,7 @@ fun CompactNewsCard(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = article.title,
+                    text = article.displayTitle,
                     style = MaterialTheme.typography.titleMedium,
                     color = titleColor(article),
                     maxLines = 2,
@@ -215,6 +227,7 @@ fun CompactNewsCard(
                 .padding(start = 16.dp, end = 4.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            PublishedLabel(publishedAt = article.publishedAt, modifier = Modifier.padding(end = 10.dp))
             ReadTimeLabel(minutes = article.readTimeMinutes)
             MarketImpactPill(
                 article = article,
@@ -289,6 +302,7 @@ private fun MetaRow(
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        PublishedLabel(publishedAt = article.publishedAt, modifier = Modifier.padding(end = 10.dp))
         ReadTimeLabel(minutes = article.readTimeMinutes)
         MarketImpactPill(
             article = article,
@@ -363,6 +377,22 @@ private fun MarketImpactNote(article: NewsArticle, visible: Boolean, modifier: M
             )
         }
     }
+}
+
+/**
+ * Data și ora publicării, scurt și în română („azi, 09:14” / „27 nov., 09:14”).
+ * Nu afișează nimic dacă data lipsește sau nu poate fi citită.
+ */
+@Composable
+fun PublishedLabel(publishedAt: String, modifier: Modifier = Modifier) {
+    val label = PublishedDate.short(publishedAt) ?: return
+    Text(
+        text = label,
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+        modifier = modifier
+    )
 }
 
 /** Timp de citire discret: iconiță ceas + „X min”. */

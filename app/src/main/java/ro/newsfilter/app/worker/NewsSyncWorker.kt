@@ -41,10 +41,18 @@ class NewsSyncWorker @AssistedInject constructor(
 
         return try {
             newsRepository.syncFeed(
-                categories = prefs.selectedCategories.ifEmpty { Category.allSlugs },
+                categories = Category.effective(prefs.selectedCategories),
                 maxMinutes = prefs.defaultMinutes
             )
             newsRepository.clearOldCache(daysOld = 7)
+            // Știrile locale (Google News RSS): best effort, nu blochează sincronizarea principală.
+            try {
+                newsRepository.syncLocalNews(prefs.localCity, prefs.localCountry)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Știrile locale nu au putut fi actualizate: ${e.message}")
+            }
             Result.success()
         } catch (e: CancellationException) {
             throw e

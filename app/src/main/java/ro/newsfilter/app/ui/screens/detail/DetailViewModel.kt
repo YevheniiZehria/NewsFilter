@@ -10,9 +10,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import ro.newsfilter.app.core.audio.NewsAudioPlayer
 import ro.newsfilter.app.core.network.toUserMessage
 import ro.newsfilter.app.domain.model.NewsArticle
 import ro.newsfilter.app.domain.repository.NewsRepository
@@ -40,12 +44,13 @@ data class DetailUiState(
  * - Încarcă articolul din cache-ul local (Room) — funcționează și offline.
  * - La deschidere, marchează automat articolul ca citit.
  * - Restaurează votul salvat (Like / Dislike rămâne vizibil la redeschidere).
- * - Acțiuni în Firestore: vot (`users/{uid}/votes`), favorit (`users/{uid}/bookmarks`), „Aprofundează” (`articles/{id}`).
+ * - Acțiuni în Firestore: vot (`users/{uid}/votes` + contoarele `articles/{id}`), favorit (`users/{uid}/bookmarks`), „Aprofundează” (`articles/{id}`).
  */
 @HiltViewModel
 class DetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
-    private val newsRepository: NewsRepository
+    private val newsRepository: NewsRepository,
+    private val audioPlayer: NewsAudioPlayer
 ) : ViewModel() {
 
     private val articleId: String = checkNotNull(savedStateHandle["articleId"])
@@ -58,28 +63,56 @@ class DetailViewModel @Inject constructor(
     /** Mesaje unice pentru Snackbar. */
     val messages: Flow<String> = _messages.receiveAsFlow()
 
+    /** True cât timp acest articol se redă (sau se pregătește) în player-ul Text-to-Speech. */
+    val isAudioPlaying: StateFlow<Boolean> = audioPlayer.state
+        .map { it.isVisible && (it.isPlaying || it.isPreparing) && it.currentArticle?.id == articleId }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     init {
         loadArticle()
     }
 
+    /** Briefing audio (TTS în română) doar pentru acest articol; a doua apăsare oprește redarea. */
+    fun toggleAudio() {
+        if (isAudioPlaying.value) {
+            audioPlayer.stop()
+        } else {
+            _uiState.value.article?.let { audioPlayer.playPack(listOf(it)) }
+        }
+    }
+
+    /**
+     * Observă articolul din Room: dacă rezumatul AI sau aprofundarea sosesc (sincronizare în
+     * fundal) cât timp ecranul e deschis, apar imediat. Prima emisie marchează articolul citit.
+     */
     private fun loadArticle() {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
-            val article = newsRepository.getArticleById(articleId)
-            if (article == null) {
-                _uiState.update { it.copy(isLoading = false, error = "Articolul nu a fost găsit.") }
-                return@launch
+            var first = true
+            newsRepository.observeArticle(articleId).collect { article ->
+                if (article == null) {
+                    // Păstrăm articolul deja afișat (ex. cache golit între timp).
+                    if (_uiState.value.article == null) {
+                        _uiState.update { it.copy(isLoading = false, error = "Articolul nu a fost găsit.") }
+                    }
+                    return@collect
+                }
+                _uiState.update {
+                    it.copy(
+                        article = article,
+                        isLoading = false,
+                        error = null,
+                        // Votul se poate retrage / schimba: Room (actualizat optimist de setVote) decide.
+                        feedbackPositive = article.userVote,
+                        isFeedbackSent = article.userVote != null,
+                        deepDive = it.deepDive ?: article.deepDive
+                    )
+                }
+                if (first) {
+                    first = false
+                    newsRepository.markAsRead(articleId)
+                }
             }
-            _uiState.update {
-                it.copy(
-                    article = article,
-                    isLoading = false,
-                    feedbackPositive = article.userVote,
-                    isFeedbackSent = article.userVote != null,
-                    deepDive = article.deepDive
-                )
-            }
-            newsRepository.markAsRead(articleId)
         }
     }
 
@@ -96,23 +129,34 @@ class DetailViewModel @Inject constructor(
     }
 
     /**
-     * Salvează feedback-ul (like/dislike) în Firestore (o singură dată per articol)
-     * și salvează votul local, ca să fie reținut la redeschiderea articolului.
+     * Votul comunității: apăsarea aceluiași buton retrage votul, celălalt buton îl schimbă.
+     * Actualizare optimistă (UI + Room); dacă Firestore respinge / e offline, revenim la votul anterior.
      */
-    fun sendFeedback(isPositive: Boolean) {
-        if (_uiState.value.isFeedbackSent) return
-        // Actualizare optimistă: UI-ul reacționează instantaneu, votul se salvează
-        // în Room, iar votul se salvează în Firestore în fundal.
-        _uiState.update { state ->
-            state.copy(
-                isFeedbackSent = true,
-                feedbackPositive = isPositive,
-                article = state.article?.copy(userVote = isPositive)
-            )
-        }
+    fun vote(isPositive: Boolean) {
+        val article = _uiState.value.article ?: return
+        val before = article.userVote
+        val after = if (before == isPositive) null else isPositive
+        showVote(article, before, after)
         viewModelScope.launch {
-            newsRepository.setUserVote(articleId, isPositive)
-            newsRepository.sendFeedback(articleId, isPositive)
+            if (!newsRepository.setVote(articleId, after)) {
+                _uiState.value.article?.let { showVote(it, after, before) }
+                _messages.send("Votul nu a putut fi trimis. Verifică conexiunea și încearcă din nou.")
+            }
+        }
+    }
+
+    private fun showVote(article: NewsArticle, before: Boolean?, after: Boolean?) {
+        fun delta(positive: Boolean) = (if (after == positive) 1 else 0) - (if (before == positive) 1 else 0)
+        _uiState.update {
+            it.copy(
+                isFeedbackSent = after != null,
+                feedbackPositive = after,
+                article = article.copy(
+                    userVote = after,
+                    upvotes = (article.upvotes + delta(true)).coerceAtLeast(0),
+                    downvotes = (article.downvotes + delta(false)).coerceAtLeast(0)
+                )
+            )
         }
     }
 

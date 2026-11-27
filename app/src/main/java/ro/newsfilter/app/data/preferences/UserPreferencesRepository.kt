@@ -33,6 +33,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
  * @property isDarkTheme Temă întunecată activată
  * @property onboardingCompleted Dacă onboarding-ul a fost parcurs
  * @property dailyNotificationEnabled Notificarea zilnică activată
+ * @property marketAlertsEnabled Alertele de piață (push FCM, topicul `market_alerts`)
  * @property notificationHour Ora notificării zilnice (0-23)
  * @property notificationMinute Minutul notificării zilnice (0-59)
  * @property shakeToRefreshEnabled „Scutură pentru știri noi” (senzorul accelerometru)
@@ -40,6 +41,8 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
  * @property userEmail Email-ul utilizatorului autentificat
  * @property userName Numele afișat al utilizatorului autentificat
  * @property authProvider Metoda de autentificare: "email" sau "google"
+ * @property localCity Orașul pentru știrile locale (gol = nesetat)
+ * @property localCountry Țara pentru știrile locale (gol = nesetată)
  */
 data class UserPreferences(
     val selectedCategories: List<String> = emptyList(),
@@ -47,14 +50,20 @@ data class UserPreferences(
     val isDarkTheme: Boolean = false,
     val onboardingCompleted: Boolean = false,
     val dailyNotificationEnabled: Boolean = false,
+    val marketAlertsEnabled: Boolean = false,
     val notificationHour: Int = 8,
     val notificationMinute: Int = 0,
     val shakeToRefreshEnabled: Boolean = true,
     val isLoggedIn: Boolean = false,
     val userEmail: String = "",
     val userName: String = "",
-    val authProvider: String = ""
-)
+    val authProvider: String = "",
+    val localCity: String = "",
+    val localCountry: String = ""
+) {
+    /** Există o locație pentru știrile locale (oraș și/sau țară). */
+    val hasLocalNews: Boolean get() = localCity.isNotBlank() || localCountry.isNotBlank()
+}
 
 /**
  * Repository pentru preferințele utilizatorului, implementat cu DataStore.
@@ -73,6 +82,7 @@ class UserPreferencesRepository @Inject constructor(
         val IS_DARK_THEME = booleanPreferencesKey("is_dark_theme")
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
         val DAILY_NOTIFICATION_ENABLED = booleanPreferencesKey("daily_notification_enabled")
+        val MARKET_ALERTS_ENABLED = booleanPreferencesKey("market_alerts_enabled")
         val NOTIFICATION_HOUR = intPreferencesKey("notification_hour")
         val NOTIFICATION_MINUTE = intPreferencesKey("notification_minute")
         val SHAKE_TO_REFRESH = booleanPreferencesKey("shake_to_refresh")
@@ -80,6 +90,8 @@ class UserPreferencesRepository @Inject constructor(
         val USER_EMAIL = stringPreferencesKey("user_email")
         val USER_NAME = stringPreferencesKey("user_name")
         val AUTH_PROVIDER = stringPreferencesKey("auth_provider")
+        val LOCAL_CITY = stringPreferencesKey("local_city")
+        val LOCAL_COUNTRY = stringPreferencesKey("local_country")
 
         /** UID-ul Firebase al utilizatorului autentificat (oglindă a `FirebaseAuth.currentUser`). */
         val FIREBASE_UID = stringPreferencesKey("firebase_uid")
@@ -105,6 +117,7 @@ class UserPreferencesRepository @Inject constructor(
             isDarkTheme = prefs[Keys.IS_DARK_THEME] ?: false,
             onboardingCompleted = prefs[Keys.ONBOARDING_COMPLETED] ?: false,
             dailyNotificationEnabled = prefs[Keys.DAILY_NOTIFICATION_ENABLED] ?: false,
+            marketAlertsEnabled = prefs[Keys.MARKET_ALERTS_ENABLED] ?: false,
             notificationHour = prefs[Keys.NOTIFICATION_HOUR] ?: 8,
             notificationMinute = prefs[Keys.NOTIFICATION_MINUTE] ?: 0,
             shakeToRefreshEnabled = prefs[Keys.SHAKE_TO_REFRESH] ?: true,
@@ -112,7 +125,9 @@ class UserPreferencesRepository @Inject constructor(
             isLoggedIn = (prefs[Keys.IS_LOGGED_IN] ?: false) && prefs[Keys.FIREBASE_UID] != null,
             userEmail = prefs[Keys.USER_EMAIL].orEmpty(),
             userName = prefs[Keys.USER_NAME].orEmpty(),
-            authProvider = prefs[Keys.AUTH_PROVIDER].orEmpty()
+            authProvider = prefs[Keys.AUTH_PROVIDER].orEmpty(),
+            localCity = prefs[Keys.LOCAL_CITY].orEmpty(),
+            localCountry = prefs[Keys.LOCAL_COUNTRY].orEmpty()
         )
     }
 
@@ -160,9 +175,23 @@ class UserPreferencesRepository @Inject constructor(
     }
 
     /** Activează/dezactivează „Scutură pentru știri noi”. */
+    suspend fun updateMarketAlerts(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.MARKET_ALERTS_ENABLED] = enabled
+        }
+    }
+
     suspend fun updateShakeToRefresh(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[Keys.SHAKE_TO_REFRESH] = enabled
+        }
+    }
+
+    /** Salvează orașul și țara pentru știrile locale (șir gol = nesetat). */
+    suspend fun updateLocalNews(city: String, country: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.LOCAL_CITY] = city
+            prefs[Keys.LOCAL_COUNTRY] = country
         }
     }
 

@@ -31,11 +31,18 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.DarkMode
+import androidx.compose.material.icons.outlined.NotificationsActive
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Vibration
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.outlined.LocationCity
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -64,6 +71,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -80,7 +90,7 @@ import ro.newsfilter.app.ui.components.formatTime
 
 /**
  * Ecranul de Setări, grupat în carduri rotunjite: Cont, Aspect, Preferințe citire,
- * Interacțiuni (senzor), Notificări.
+ * Știri locale (oraș + țară), Interacțiuni (senzor), Notificări.
  *
  * Notificări:
  * - Rândul „Ora notificării" deschide un TimePickerDialog Material 3; ora aleasă
@@ -113,9 +123,12 @@ fun SettingsScreen(
     }
 
     // Sincronizare: switch activ, dar permisiunea lipsește → îl dezactivăm.
-    LaunchedEffect(notificationsAllowed, prefs.dailyNotificationEnabled) {
+    LaunchedEffect(notificationsAllowed, prefs.dailyNotificationEnabled, prefs.marketAlertsEnabled) {
         if (prefs.dailyNotificationEnabled && !notificationsAllowed) {
             viewModel.setDailyNotification(false)
+        }
+        if (prefs.marketAlertsEnabled && !notificationsAllowed) {
+            viewModel.setMarketAlerts(false)
         }
     }
 
@@ -140,6 +153,30 @@ fun SettingsScreen(
         notificationsAllowed = context.areNotificationsAllowed()
         viewModel.setDailyNotification(isGranted)
         if (!isGranted) showPermissionSnackbar()
+    }
+
+    fun showMarketAlertsError() {
+        scope.launch {
+            snackbarHostState.showSnackbar("Nu am putut actualiza alertele de piață. Verifică conexiunea și încearcă din nou.")
+        }
+    }
+
+    // Launcher separat pentru alertele de piață (același dialog de sistem, altă acțiune la final).
+    val marketPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        notificationsAllowed = context.areNotificationsAllowed()
+        if (isGranted) viewModel.setMarketAlerts(true, ::showMarketAlertsError) else showPermissionSnackbar()
+    }
+
+    fun onMarketAlertsToggle(enable: Boolean) {
+        when {
+            !enable -> viewModel.setMarketAlerts(false, ::showMarketAlertsError)
+            context.areNotificationsAllowed() -> viewModel.setMarketAlerts(true, ::showMarketAlertsError)
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ->
+                marketPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            else -> showPermissionSnackbar()
+        }
     }
 
     fun onDailyNotificationToggle(enable: Boolean) {
@@ -280,6 +317,24 @@ fun SettingsScreen(
                 }
             }
 
+            // === Card: Știri locale (Google News RSS, descărcate pe dispozitiv) ===
+            SettingsCard(title = "Știri locale (Oraș și Țară)") {
+                LocalNewsSettings(
+                    savedCity = prefs.localCity,
+                    savedCountry = prefs.localCountry,
+                    onSave = { city, country ->
+                        viewModel.setLocalNews(city, country)
+                        scope.launch {
+                            snackbarHostState.currentSnackbarData?.dismiss()
+                            snackbarHostState.showSnackbar(
+                                if (city.isBlank() && country.isBlank()) "Știrile locale au fost dezactivate."
+                                else "Locație salvată. Știrile locale apar în Feed la „📍”."
+                            )
+                        }
+                    }
+                )
+            }
+
             // === Card: Interacțiuni (senzor accelerometru) ===
             SettingsCard(title = "Interacțiuni") {
                 ListItem(
@@ -381,6 +436,42 @@ fun SettingsScreen(
                         onClick = { showTimePicker = true }
                     )
                 )
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
+                ListItem(
+                    headlineContent = { Text("Alerte de piață") },
+                    supportingContent = {
+                        Text(
+                            when {
+                                prefs.marketAlertsEnabled ->
+                                    "Mișcări de peste 1,5% la EUR/RON, USD/RON, BTC/USD și știri cu impact major"
+                                !notificationsAllowed ->
+                                    "Notificările sunt blocate — atinge pentru a le permite"
+                                else -> "Dezactivat"
+                            }
+                        )
+                    },
+                    leadingContent = {
+                        SettingsIcon(
+                            if (prefs.marketAlertsEnabled) {
+                                Icons.Outlined.NotificationsActive
+                            } else {
+                                Icons.Outlined.NotificationsOff
+                            }
+                        )
+                    },
+                    trailingContent = {
+                        Switch(checked = prefs.marketAlertsEnabled, onCheckedChange = null)
+                    },
+                    colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+                    modifier = Modifier.toggleable(
+                        value = prefs.marketAlertsEnabled,
+                        role = Role.Switch,
+                        onValueChange = ::onMarketAlertsToggle
+                    )
+                )
             }
         }
 
@@ -438,6 +529,73 @@ fun SettingsScreen(
 /**
  * Card de setări rotunjit, cu titlul secțiunii deasupra (stil „grouped list”).
  */
+/**
+ * Câmpurile Oraș / Țară. Valorile se salvează doar la „Salvează” (nu la fiecare tastă),
+ * ca Feed-ul să nu descarce știri pentru fiecare literă introdusă.
+ */
+@Composable
+private fun LocalNewsSettings(
+    savedCity: String,
+    savedCountry: String,
+    onSave: (city: String, country: String) -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+    var city by rememberSaveable(savedCity) { mutableStateOf(savedCity) }
+    var country by rememberSaveable(savedCountry) { mutableStateOf(savedCountry) }
+    val changed = city.trim() != savedCity || country.trim() != savedCountry
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text(
+            text = "Primești în Feed (chip-ul „📍”) cele mai recente știri din zona ta, din Google News.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        OutlinedTextField(
+            value = city,
+            onValueChange = { city = it },
+            label = { Text("Oraș") },
+            placeholder = { Text("ex. Suceava") },
+            leadingIcon = { Icon(Icons.Outlined.LocationCity, contentDescription = null) },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Words,
+                imeAction = ImeAction.Next
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        OutlinedTextField(
+            value = country,
+            onValueChange = { country = it },
+            label = { Text("Țară") },
+            placeholder = { Text("ex. România") },
+            leadingIcon = { Icon(Icons.Outlined.Public, contentDescription = null) },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Words,
+                imeAction = ImeAction.Done
+            ),
+            keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+        Button(
+            onClick = {
+                focusManager.clearFocus()
+                onSave(city.trim(), country.trim())
+            },
+            enabled = changed,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text("Salvează")
+        }
+    }
+}
+
 @Composable
 private fun SettingsCard(
     title: String,
