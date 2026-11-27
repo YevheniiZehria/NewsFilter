@@ -10,9 +10,13 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import ro.newsfilter.app.core.audio.NewsAudioPlayer
 import ro.newsfilter.app.core.network.toUserMessage
 import ro.newsfilter.app.domain.model.NewsArticle
 import ro.newsfilter.app.domain.repository.NewsRepository
@@ -45,7 +49,8 @@ data class DetailUiState(
 @HiltViewModel
 class DetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
-    private val newsRepository: NewsRepository
+    private val newsRepository: NewsRepository,
+    private val audioPlayer: NewsAudioPlayer
 ) : ViewModel() {
 
     private val articleId: String = checkNotNull(savedStateHandle["articleId"])
@@ -58,8 +63,22 @@ class DetailViewModel @Inject constructor(
     /** Mesaje unice pentru Snackbar. */
     val messages: Flow<String> = _messages.receiveAsFlow()
 
+    /** True cât timp acest articol se redă (sau se pregătește) în player-ul Text-to-Speech. */
+    val isAudioPlaying: StateFlow<Boolean> = audioPlayer.state
+        .map { it.isVisible && (it.isPlaying || it.isPreparing) && it.currentArticle?.id == articleId }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
     init {
         loadArticle()
+    }
+
+    /** Briefing audio (TTS în română) doar pentru acest articol; a doua apăsare oprește redarea. */
+    fun toggleAudio() {
+        if (isAudioPlaying.value) {
+            audioPlayer.stop()
+        } else {
+            _uiState.value.article?.let { audioPlayer.playPack(listOf(it)) }
+        }
     }
 
     private fun loadArticle() {

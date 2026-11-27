@@ -24,7 +24,8 @@ import javax.inject.Singleton
  * `XmlPullParser`), deci nicio dependență nouă.
  *
  * Articolele primesc categoria `local` și un ID `local_<sha1(link)>`, ca să nu se suprapună
- * cu ID-urile din Firestore. Nu au rezumat AI / aprofundare (nu trec prin jobul `sync/`).
+ * cu ID-urile din Firestore. Nu trec prin jobul `sync/`: rezumatul, ideile cheie și aprofundarea
+ * se generează pe dispozitiv de [LocalNewsAiEnricher].
  */
 @Singleton
 class GoogleNewsRssSource @Inject constructor() {
@@ -87,8 +88,8 @@ class GoogleNewsRssSource @Inject constructor() {
         }.orEmpty()
         // Descrierea Google News e de obicei doar „titlu + sursă” → nu repetăm titlul pe card.
         val summary = description.takeIf { it.isNotBlank() && !it.startsWith(title) }
-            ?: if (source.isNotBlank()) "Știre locală publicată de $source. Deschide articolul pentru textul complet."
-            else "Știre locală. Deschide articolul pentru textul complet."
+            ?: if (source.isNotBlank()) "Știre locală publicată de $source. $PLACEHOLDER_SUFFIX"
+            else "Știre locală. $PLACEHOLDER_SUFFIX"
         return NewsArticle(
             id = "local_" + sha1(link).take(20),
             title = title,
@@ -112,8 +113,12 @@ class GoogleNewsRssSource @Inject constructor() {
     private fun sha1(text: String): String =
         MessageDigest.getInstance("SHA-1").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }
 
-    private companion object {
-        const val TIMEOUT_MS = 10_000
-        const val MAX_ITEMS = 30
+    companion object {
+        private const val TIMEOUT_MS = 10_000
+        private const val MAX_ITEMS = 30
+        private const val PLACEHOLDER_SUFFIX = "Deschide articolul pentru textul complet."
+
+        /** True pentru descrierea generică pusă când RSS-ul nu are text propriu. */
+        fun isPlaceholderSummary(text: String): Boolean = text.endsWith(PLACEHOLDER_SUFFIX)
     }
 }

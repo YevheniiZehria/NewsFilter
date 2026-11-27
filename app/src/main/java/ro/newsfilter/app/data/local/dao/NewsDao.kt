@@ -45,6 +45,13 @@ interface NewsDao {
     )
     fun observeFeed(categories: List<String>, query: String, limit: Int): Flow<List<NewsEntity>>
 
+    /**
+     * Articolele din feed-ul Firestore aflate în cache (fără știrile locale și fără copiile din favorite).
+     * 0 cu un cursor de sincronizare salvat = cache golit (ex. migrare distructivă) → resincronizare completă.
+     */
+    @Query("SELECT COUNT(*) FROM news WHERE category != :localCategory AND is_bookmarked = 0")
+    suspend fun countFeedArticles(localCategory: String): Int
+
     /** Șterge articolele nesalvate din [category] care nu sunt în [keepIds] (știrile locale vechi). */
     @Query("DELETE FROM news WHERE category = :category AND is_bookmarked = 0 AND id NOT IN (:keepIds)")
     suspend fun deleteStaleInCategory(category: String, keepIds: List<String>)

@@ -41,7 +41,9 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.BookmarkBorder
@@ -119,6 +121,7 @@ fun DetailScreen(
     viewModel: DetailViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val isAudioPlaying by viewModel.isAudioPlaying.collectAsStateWithLifecycle()
     val article = uiState.article
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -186,11 +189,18 @@ fun DetailScreen(
                     onClick = onBackClick
                 )
                 if (article != null) {
-                    FloatingIconButton(
-                        icon = Icons.Filled.Share,
-                        description = "Distribuie articolul",
-                        onClick = { ArticleIntents.share(context, article.displayTitle, article.articleUrl) }
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FloatingIconButton(
+                            icon = if (isAudioPlaying) Icons.Filled.Stop else Icons.Filled.Headphones,
+                            description = if (isAudioPlaying) "Oprește briefingul audio" else "Ascultă briefingul audio",
+                            onClick = viewModel::toggleAudio
+                        )
+                        FloatingIconButton(
+                            icon = Icons.Filled.Share,
+                            description = "Distribuie articolul",
+                            onClick = { ArticleIntents.share(context, article.displayTitle, article.articleUrl) }
+                        )
+                    }
                 }
             }
         }
@@ -301,6 +311,13 @@ private fun ArticleContent(
 
                 val hasAiSummary = article.isAiProcessed
                 val displaySummary = article.displaySummary
+                val isLocal = article.category == Category.LOCAL.slug
+                // Știrile locale fără aprofundare au fost rezumate extractiv (fără Gemini).
+                val summaryLabel = when {
+                    !hasAiSummary -> "TEXT ORIGINAL (EN) · rezumatul în română se generează"
+                    isLocal && article.deepDive.isNullOrBlank() -> "REZUMAT AUTOMAT"
+                    else -> "REZUMAT AI"
+                }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (hasAiSummary) {
@@ -313,7 +330,7 @@ private fun ArticleContent(
                         Spacer(modifier = Modifier.width(6.dp))
                     }
                     Text(
-                        text = if (hasAiSummary) "REZUMAT AI" else "TEXT ORIGINAL (EN) · rezumatul în română se generează",
+                        text = summaryLabel,
                         style = MaterialTheme.typography.labelMedium,
                         color = if (hasAiSummary) {
                             MaterialTheme.colorScheme.primary
@@ -394,8 +411,8 @@ private fun ArticleContent(
                     }
                 }
 
-                // Știrile locale (Google News, pe dispozitiv) nu trec prin Gemini → fără aprofundare.
-                if (article.category != Category.LOCAL.slug) {
+                // Știrile locale: aprofundarea există doar dacă a generat-o Gemini pe dispozitiv (nu din Firestore).
+                if (!isLocal || deepDive != null) {
                     Spacer(modifier = Modifier.height(20.dp))
                     DeepDiveSection(
                         deepDive = deepDive,

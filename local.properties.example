@@ -6,3 +6,7 @@ sdk.dir=/path/to/Android/sdk
 
 # Backend-ul (Firebase Auth + Cloud Firestore) se configurează prin app/google-services.json
 # (vezi FIREBASE_SETUP.md), nu aici.
+
+# Opțional: cheie Gemini (gratuită, https://aistudio.google.com/apikey) pentru rezumatele AI
+# ale știrilor locale generate pe dispozitiv. Fără ea se folosește rezumatul extractiv offline.
+# GEMINI_API_KEY=

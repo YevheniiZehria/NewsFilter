@@ -23,7 +23,9 @@ import ro.newsfilter.app.data.preferences.UserPreferencesRepository
 import ro.newsfilter.app.data.remote.firestore.FirestorePaths
 import ro.newsfilter.app.data.remote.firestore.toBookmarkData
 import ro.newsfilter.app.data.remote.firestore.toNewsArticleOrNull
+import ro.newsfilter.app.data.remote.localnews.BingNewsRssSource
 import ro.newsfilter.app.data.remote.localnews.GoogleNewsRssSource
+import ro.newsfilter.app.data.remote.localnews.LocalNewsAiEnricher
 import ro.newsfilter.app.domain.model.Category
 import ro.newsfilter.app.domain.model.NewsArticle
 import ro.newsfilter.app.domain.repository.NewsRepository
@@ -58,7 +60,9 @@ class NewsRepositoryImpl @Inject constructor(
     private val preferences: UserPreferencesRepository,
     private val newsDao: NewsDao,
     private val networkMonitor: NetworkMonitor,
-    private val localNewsSource: GoogleNewsRssSource
+    private val bingNewsSource: BingNewsRssSource,
+    private val googleNewsSource: GoogleNewsRssSource,
+    private val localNewsEnricher: LocalNewsAiEnricher
 ) : NewsRepository {
 
     /** Voturile rapide (ex. 👍 apoi 👎) se trimit pe rând: fiecare tranziție pornește de la cea anterioară. */
@@ -68,18 +72,37 @@ class NewsRepositoryImpl @Inject constructor(
         newsDao.observeFeed(categories, query, FEED_LIMIT).map { list -> list.map { it.toDomain() } }
 
     /**
-     * Știrile locale vin direct de pe dispozitiv (Google News RSS), nu din Firestore.
+     * Știrile locale vin direct de pe dispozitiv, nu din Firestore: Bing News RSS (linkuri reale către
+     * editori → text complet), cu Google News RSS ca rezervă dacă Bing eșuează sau nu are rezultate.
      * Știrile locale care nu mai apar în rezultat (alt oraș / mai vechi) și nu sunt salvate se
      * șterg, ca feed-ul „📍” să arate doar locația curentă; starea locală (citit, salvat) a
      * celorlalte se păstrează. O eroare de rețea nu șterge nimic (cache-ul rămâne pentru offline).
+     *
+     * Smart Digest local: articolele noi apar imediat (din RSS), apoi cele mai recente
+     * [MAX_LOCAL_ENRICH_PER_SYNC] neprocesate primesc text complet + rezumat ([LocalNewsAiEnricher]).
+     * Câmpurile îmbogățite rămân în Room, deci un articol nu se procesează niciodată de două ori.
      */
     override suspend fun syncLocalNews(city: String, country: String) {
         if (city.isBlank() && country.isBlank()) return
         ensureOnline()
-        val articles = localNewsSource.fetch(city.trim(), country.trim())
-        newsDao.deleteStaleInCategory(Category.LOCAL.slug, articles.map { it.id })
+        val fetched = fetchLocalArticles(city.trim(), country.trim())
+        newsDao.deleteStaleInCategory(Category.LOCAL.slug, fetched.map { it.id })
+        val existing = newsDao.getArticlesByIds(fetched.map { it.id }).associateBy { it.id }
+        val articles = fetched.map { article ->
+            existing[article.id]?.toDomain()?.takeIf { it.isAiProcessed }?.let { article.withLocalEnrichmentFrom(it) } ?: article
+        }
         val saved = upsertKeepingLocalState(articles, serverBookmarksWin = false)
         Log.d(TAG, "Știri locale ($city, $country): $saved salvate în cache")
+
+        val pending = articles.filter { !it.isAiProcessed }
+            .sortedByDescending { it.publishedAt }
+            .take(MAX_LOCAL_ENRICH_PER_SYNC)
+        if (pending.isEmpty()) return
+        val enriched = localNewsEnricher.enrich(pending, city.trim().ifBlank { country.trim() })
+        // Între timp locația se poate schimba (articolele vechi șterse): nu le reintroducem.
+        val stillCached = newsDao.getArticlesByIds(enriched.map { it.id }).map { it.id }.toSet()
+        val enrichedSaved = upsertKeepingLocalState(enriched.filter { it.id in stillCached }, serverBookmarksWin = false)
+        Log.d(TAG, "Știri locale: $enrichedSaved rezumate generate")
     }
 
     /**
@@ -90,7 +113,10 @@ class NewsRepositoryImpl @Inject constructor(
         ensureOnline()
         requireUid()
         val articles = firestore.collection(FirestorePaths.ARTICLES)
+        // Cursorul (DataStore) poate supraviețui unui cache Room golit (migrare distructivă, curățare,
+        // date șterse): fără articole în cache, sincronizarea incrementală n-ar mai aduce nimic.
         val lastSync = preferences.lastFeedSync()
+            .takeIf { it == 0L || newsDao.countFeedArticles(Category.LOCAL.slug) > 0 } ?: 0L
         val docs = mutableListOf<DocumentSnapshot>()
 
         if (lastSync == 0L) {
@@ -121,7 +147,12 @@ class NewsRepositoryImpl @Inject constructor(
     }
 
     override suspend fun requestDeepDive(articleId: String): String {
-        newsDao.getArticleById(articleId)?.deepDive?.takeIf { it.isNotBlank() }?.let { return it }
+        val cached = newsDao.getArticleById(articleId)
+        cached?.deepDive?.takeIf { it.isNotBlank() }?.let { return it }
+        // Știrile locale nu există în Firestore: aprofundarea vine doar din Gemini, pe dispozitiv.
+        if (cached?.category == Category.LOCAL.slug) {
+            throw UserFacingException("Aprofundarea nu este disponibilă pentru această știre locală.")
+        }
         ensureOnline()
         val doc = firestore.collection(FirestorePaths.ARTICLES).document(articleId).get().await()
         val text = doc.getString("deepDive")?.trim()?.takeIf { it.isNotEmpty() }
@@ -251,6 +282,31 @@ class NewsRepositoryImpl @Inject constructor(
         return entities.size
     }
 
+    private suspend fun fetchLocalArticles(city: String, country: String): List<NewsArticle> {
+        val bing = try {
+            bingNewsSource.fetch(city, country)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "Bing News indisponibil, folosesc Google News: ${e.message}")
+            emptyList()
+        }
+        return bing.ifEmpty { googleNewsSource.fetch(city, country) }
+    }
+
+    /** Păstrează conținutul generat anterior pe dispozitiv (RSS-ul aduce din nou doar titlul și linkul). */
+    private fun NewsArticle.withLocalEnrichmentFrom(cached: NewsArticle) = copy(
+        articleUrl = cached.articleUrl,
+        imageUrl = imageUrl ?: cached.imageUrl,
+        summary = cached.summary,
+        readTimeMinutes = cached.readTimeMinutes,
+        fullContent = cached.fullContent,
+        aiSummary = cached.aiSummary,
+        aiBullets = cached.aiBullets,
+        aiTags = cached.aiTags,
+        deepDive = cached.deepDive
+    )
+
     private fun requireUid(): String =
         sessionManager.currentUid ?: throw UserFacingException("Sesiunea a expirat. Autentifică-te din nou.")
 
@@ -271,6 +327,8 @@ class NewsRepositoryImpl @Inject constructor(
         const val INITIAL_LIMIT = 200L
         const val PAGE_SIZE = 200L
         const val MAX_PAGES = 3
+        /** Câte știri locale noi se rezumă per sincronizare (cota gratuită Gemini: ~3 cereri / sincronizare). */
+        const val MAX_LOCAL_ENRICH_PER_SYNC = 12
 
         /** Variația contorului (upvotes dacă [positive], altfel downvotes) la trecerea [before] → [after]. */
         fun voteDelta(before: Boolean?, after: Boolean?, positive: Boolean): Int =

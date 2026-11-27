@@ -145,6 +145,11 @@ class NewsAudioService : Service(), TextToSpeech.OnInitListener {
             if (article.displaySummary.isNotBlank()) {
                 append(article.displaySummary)
             }
+            // Smart Digest: ideile cheie, dacă există (feed-ul principal și știrile locale îmbogățite).
+            if (article.aiBullets.isNotEmpty()) {
+                append(" Pe scurt: ")
+                article.aiBullets.forEach { append(it.trimEnd('.', ' ')).append(". ") }
+            }
         }
         engine.speak(textToRead, TextToSpeech.QUEUE_FLUSH, null, article.id)
         promoteToForeground()
