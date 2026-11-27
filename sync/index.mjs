@@ -9,14 +9,17 @@
  * starea AI), deci o rulare costă câteva citiri și scrie doar articolele noi / reprocesate.
  *
  * Variabile de mediu: FIREBASE_SERVICE_ACCOUNT (JSON-ul cheii contului de serviciu),
- * GEMINI_API_KEY (opțională). `--dry-run` (sau DRY_RUN=1): fără Firestore, fără Gemini.
+ * GEMINI_API_KEY (opțională). `--dry-run` (sau DRY_RUN=1): fără Firestore, fără Gemini, fără FCM
+ * (alertele care s-ar trimite sunt doar afișate; ALERT_THRESHOLD_PCT=0.1 le forțează pentru test).
  */
 import { cert, initializeApp } from 'firebase-admin/app';
 import { FieldValue, getFirestore } from 'firebase-admin/firestore';
+import { getMessaging } from 'firebase-admin/messaging';
 import { fetchAllFeeds } from './lib/rss.mjs';
 import { scrapeArticles } from './lib/scrape.mjs';
-import { digestArticles } from './lib/gemini.mjs';
+import { buildPrompt, digestArticles } from './lib/gemini.mjs';
 import { appendPoint, fetchMarketRates, mergeDaily } from './lib/market.mjs';
+import { newsAlert, rateAlerts, sendAlerts } from './lib/notify.mjs';
 import { DAY_MS, pairKey } from './lib/util.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run') || process.env.DRY_RUN === '1';
@@ -56,14 +59,21 @@ async function commitAll(ops) {
 }
 
 // ---------------------------------------------------------------- Cursuri valutare
+const SLOT_MS = 30 * 60_000;
+
+/** Ultimul punct intraday dinaintea slotului curent = cursul de la rularea anterioară. */
+const previousPoint = (points) => (points || []).filter((p) => p.t < Math.floor(now / SLOT_MS) * SLOT_MS).at(-1)?.v;
+
+/** @returns [{ pair, rate, previous }] pentru alertele de mișcare bruscă */
 async function syncMarket(state) {
   const rates = await fetchMarketRates(state, now);
-  if (rates.length === 0) return;
+  if (rates.length === 0) return [];
   const updatedAt = new Date(now).toISOString();
 
   if (DRY_RUN) {
     for (const r of rates) console.log(`  ${r.pair} = ${r.rate} (${r.changePercent ?? '–'}%) istoric: ${r.history?.length ?? 0} puncte`);
-    return;
+    // Fără Firestore: variația raportată de sursă ține locul cursului anterior (doar pentru simulare).
+    return rates.map((r) => ({ pair: r.pair, rate: r.rate, previous: r.changePercent != null ? r.rate / (1 + r.changePercent / 100) : null }));
   }
 
   const ops = [];
@@ -90,6 +100,7 @@ async function syncMarket(state) {
 
   await commitAll(ops);
   console.log(`Cursuri salvate: ${rates.map((r) => r.pair).join(', ')}`);
+  return rates.map((r, i) => ({ pair: r.pair, rate: r.rate, previous: previousPoint(intradaySnaps[i].data()?.points) }));
 }
 
 // ---------------------------------------------------------------- Știri
@@ -104,8 +115,10 @@ async function syncNews(index) {
   await scrapeArticles(fresh);
   for (const a of fresh) {
     Object.assign(a, {
-      aiSummary: null, aiBullets: [], aiTags: [], deepDive: null,
-      affectedCurrency: null, marketSentiment: null, marketImpactNote: null, aiProcessed: false
+      aiTitle: null, aiSummary: null, aiBullets: [], aiTags: [], deepDive: null,
+      affectedCurrency: null, marketSentiment: null, marketImpactNote: null, marketImpactStrength: null, aiProcessed: false,
+      // Voturile comunității: incrementate doar de aplicație (FieldValue.increment), verificate de reguli.
+      upvotes: 0, downvotes: 0
     });
   }
 
@@ -131,13 +144,20 @@ async function syncNews(index) {
 
   const ops = [];
   const toDoc = ({ id, ...rest }) => ({ ...rest, updatedAt: FieldValue.serverTimestamp() });
+  // Reîncercările scriu DOAR câmpurile AI (merge): restul documentului (text complet, voturi) rămâne neatins.
+  const toAiPatch = (a) => ({
+    aiTitle: a.aiTitle ?? null, aiSummary: a.aiSummary, aiBullets: a.aiBullets, aiTags: a.aiTags, deepDive: a.deepDive,
+    affectedCurrency: a.affectedCurrency, marketSentiment: a.marketSentiment, marketImpactNote: a.marketImpactNote,
+    marketImpactStrength: a.marketImpactStrength ?? null,
+    aiProcessed: true, updatedAt: FieldValue.serverTimestamp()
+  });
   for (const a of fresh) {
     index[a.id] = { p: a.publishedAt, ai: a.aiProcessed, n: aiQueue.includes(a) ? 1 : 0 };
     if (db) ops.push((b) => b.set(db.doc(`articles/${a.id}`), toDoc(a)));
   }
   for (const a of retries) {
     index[a.id] = { ...index[a.id], ai: a.aiProcessed, n: (index[a.id]?.n || 0) + 1 };
-    if (db && a.aiProcessed) ops.push((b) => b.set(db.doc(`articles/${a.id}`), toDoc(a)));
+    if (db && a.aiProcessed) ops.push((b) => b.set(db.doc(`articles/${a.id}`), toAiPatch(a), { merge: true }));
   }
 
   // Curățare: articole mai vechi de 14 zile.
@@ -154,26 +174,37 @@ async function syncNews(index) {
     for (const a of fresh.slice(0, 5)) {
       console.log(`  [${a.category}] ${a.title} — ${a.readTimeMinutes} min, text complet: ${a.fullContent ? a.fullContent.length + ' caractere' : 'nu'}`);
     }
+    // Structura promptului Gemini (fără apel): primele 2 articole, conținut scurtat.
+    if (fresh.length) {
+      const sample = fresh.slice(0, 2).map((a) => ({ ...a, fullContent: (a.fullContent || a.summary || '').slice(0, 160) + '…' }));
+      console.log(`\n--- Prompt Gemini (dry-run, exemplu) ---\n${buildPrompt(sample)}\n--- sfârșit prompt ---`);
+    }
   }
+  return aiQueue;
 }
 
 // ---------------------------------------------------------------- Main
 const state = await readDoc('meta/sync');
 const index = (await readDoc('meta/index')).articles || {};
 let failed = false;
+const alerts = [];
 
 try {
-  await syncMarket(state);
+  alerts.push(...rateAlerts(await syncMarket(state)));
 } catch (e) {
   failed = true;
   console.error('Eroare cursuri valutare:', e);
 }
 try {
-  await syncNews(index);
+  const alert = newsAlert(await syncNews(index));
+  if (alert) alerts.push(alert);
 } catch (e) {
   failed = true;
   console.error('Eroare știri:', e);
 }
+
+console.log(`Alerte FCM: ${alerts.length}`);
+await sendAlerts(alerts, { dryRun: DRY_RUN, messaging: db ? getMessaging() : null });
 
 if (db) {
   await commitAll([

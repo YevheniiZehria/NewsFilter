@@ -66,6 +66,15 @@
             android:exported="false"
             android:foregroundServiceType="mediaPlayback" />
 
+        <!-- Alerte de piață (FCM, topicul market_alerts): notificare + deep link -->
+        <service
+            android:name=".core.notifications.NewsFilterMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <!-- WorkManager Hilt Provider configuration -->
         <provider
             android:name="androidx.startup.InitializationProvider"

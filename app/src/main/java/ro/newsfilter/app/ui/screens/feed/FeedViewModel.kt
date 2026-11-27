@@ -55,6 +55,8 @@ data class FeedUiState(
     val isServerRefreshRunning: Boolean = false,
     val selectedMinutes: Int = 5,
     val selectedCategories: List<String> = emptyList(),
+    /** Chip-ul „Trending azi”: lista arată știrile de azi cele mai votate, în locul feed-ului. */
+    val trendingOnly: Boolean = false,
     val totalReadTimeMinutes: Int = 0,
     val error: String? = null,
     /** Prenumele utilizatorului autentificat, pentru salutul personalizat. */
@@ -109,6 +111,9 @@ data class MarketWidgetState(
     val displayHistory: MarketHistory? get() = if (inverted) history?.inverted() else history
 }
 
+/** Ce interogare Room alimentează lista Feed-ului (categorii / 📍, text căutat, Trending). */
+private data class FeedSource(val categories: List<String>, val query: String, val trending: Boolean)
+
 /** Unde se deschide știrea din bannerul Market Pulse. */
 sealed interface MarketEventTarget {
     /** Articolul există în cache-ul Room → ecranul de detaliu. */
@@ -162,6 +167,8 @@ class FeedViewModel @Inject constructor(
 
     private val categories = MutableStateFlow<List<String>?>(null)
     private val searchQuery = MutableStateFlow("")
+    /** Chip-urile „🔥 Trending azi” și „📍 Oraș” se exclud reciproc („Toate” = niciunul). */
+    private val trendingOnly = MutableStateFlow(false)
     private val localOnly = MutableStateFlow(false)
     /** Orașul / țara din Setări pentru știrile locale. */
     private var localLocation = "" to ""
@@ -225,8 +232,8 @@ class FeedViewModel @Inject constructor(
                 }
         }
 
-        // Sursa unică de adevăr pentru listă: cache-ul Room, filtrat după categorii / chip-ul
-        // „📍” și textul căutat (cu debounce, ca interogarea să nu ruleze la fiecare tastă).
+        // Sursa unică de adevăr pentru listă: cache-ul Room — feed-ul personal, „Trending azi” sau
+        // „📍” — filtrat după textul căutat (cu debounce, ca interogarea să nu ruleze la fiecare tastă).
         viewModelScope.launch {
             combine(
                 categories.filterNotNull(),
@@ -234,12 +241,16 @@ class FeedViewModel @Inject constructor(
                     .debounce { if (it.isBlank()) 0L else SEARCH_DEBOUNCE_MS }
                     .map { it.trim().escapeLike() }
                     .distinctUntilChanged(),
+                trendingOnly,
                 localOnly
-            ) { selected, query, local ->
-                (if (local) listOf(Category.LOCAL.slug) else selected) to query
+            ) { selected, query, trending, local ->
+                FeedSource(if (local) listOf(Category.LOCAL.slug) else selected, query, trending && !local)
             }
                 .distinctUntilChanged()
-                .flatMapLatest { (selected, query) -> newsRepository.observeFeed(selected, query) }
+                .flatMapLatest { source ->
+                    if (source.trending) newsRepository.observeTrending(source.query)
+                    else newsRepository.observeFeed(source.categories, source.query)
+                }
                 .collect { articles ->
                     _uiState.update {
                         it.copy(
@@ -333,8 +344,16 @@ class FeedViewModel @Inject constructor(
     /** Chip-urile „Toate” / „📍 Oraș”. Fără locație setată, chip-ul local nu se poate selecta. */
     fun selectLocal(local: Boolean) {
         if (local && !_uiState.value.hasLocalNews) return
+        setFilter(trending = false, local = local)
+    }
+
+    /** Chip-ul „Toate”: feed-ul personal, fără Trending / 📍. */
+    fun selectAll() = setFilter(trending = false, local = false)
+
+    private fun setFilter(trending: Boolean, local: Boolean) {
+        trendingOnly.value = trending
         localOnly.value = local
-        _uiState.update { it.copy(localOnly = local) }
+        _uiState.update { it.copy(trendingOnly = trending, localOnly = local) }
     }
 
     /**
@@ -454,6 +473,9 @@ class FeedViewModel @Inject constructor(
             }
         }
     }
+
+    /** Chip-ul „Trending azi” (filtru local, fără citiri din Firestore). */
+    fun toggleTrending() = setFilter(trending = !trendingOnly.value, local = false)
 
     /** Schimbă timpul de lectură și resincronizează. */
     fun onTimeChanged(newMinutes: Int) {

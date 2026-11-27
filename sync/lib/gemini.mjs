@@ -16,18 +16,20 @@ const cleanList = (value, max, maxLen) => (Array.isArray(value) ? value : [])
   .map((v) => v.slice(0, maxLen))
   .slice(0, max);
 
-function buildPrompt(batch) {
+export function buildPrompt(batch) {
   const items = batch.map((a) => ({
     id: a.id,
     titlu: a.title,
     continut: (a.fullContent || a.summary || '').slice(0, CONTENT_CHARS)
   }));
-  return `Esti redactor si analist de stiri. Pentru FIECARE articol din lista JSON de mai jos raspunde DOAR cu un array JSON valid, in limba ROMANA, cu cate un obiect per articol (acelasi "id"):
-[{"id": "...", "summary": "rezumat de 3-4 propozitii", "bullets": ["idee cheie 1", "idee cheie 2", "idee cheie 3"], "tags": ["eticheta 1", "eticheta 2"], "affected_currency": "EUR/RON", "market_sentiment": "UP", "market_impact_note": "o propozitie", "deep_dive": "Context: ...\\nDe ce conteaza: ...\\nCe urmeaza: ..."}]
+  return `Esti redactor si analist de stiri pentru un public din Romania. Articolele sunt in limba ENGLEZA; traduce-le si redacteaza-le in limba ROMANA. Pentru FIECARE articol din lista JSON de mai jos raspunde DOAR cu un array JSON valid, cu cate un obiect per articol (acelasi "id"):
+[{"id": "...", "title": "titlul tradus in romana", "summary": "rezumat de 3-4 propozitii", "bullets": ["idee cheie 1", "idee cheie 2", "idee cheie 3"], "tags": ["eticheta 1", "eticheta 2"], "affected_currency": "EUR/RON", "market_sentiment": "UP", "market_impact_note": "o propozitie", "impact_strength": 2, "deep_dive": "Context: ...\\nDe ce conteaza: ...\\nCe urmeaza: ..."}]
 Reguli:
+- LIMBA: toate campurile text ("title", "summary", "bullets", "tags", "market_impact_note", "deep_dive") sunt scrise EXCLUSIV intr-o romana naturala si clara, cu diacritice (ă, â, î, ș, ț). Nu lasa propozitii sau titluri in engleza; numele proprii (persoane, organizatii, locuri) raman cum sunt, iar denumirile consacrate se folosesc in forma romaneasca (ex. "Rezerva Federala", "Uniunea Europeana").
+- "title" este traducerea fidela a titlului original, sub 15 cuvinte, fara ghilimele si fara clickbait.
 - "bullets" are 2-3 elemente, fiecare sub 20 de cuvinte, cu informatia esentiala; "tags" are 2-4 etichete scurte (1-2 cuvinte, litere mici) despre subiecte, persoane, locuri sau organizatii. Nu inventa informatii.
-- "affected_currency" este UNA dintre perechile EUR/RON, USD/RON, BTC/USD, doar daca stirea poate influenta clar cursul acelei perechi; altfel null. "market_sentiment" este directia probabila a perechii: "UP" = prima moneda se apreciaza fata de a doua, "DOWN" = se depreciaza, "NEUTRAL" = impact neclar (obligatoriu "NEUTRAL" cand affected_currency este null). "market_impact_note" este o singura propozitie (sub 25 de cuvinte) care explica impactul, sau null cand affected_currency este null.
-- "deep_dive" este o aprofundare de 150-220 de cuvinte cu exact trei sectiuni, fiecare pe un rand nou, incepand cu titlul urmat de doua puncte: "Context:", "De ce conteaza:", "Ce urmeaza:". Foloseste doar informatii din articol si cunostinte generale sigure; nu inventa cifre, nume sau citate; fara markdown.
+- "affected_currency" este UNA dintre perechile EUR/RON, USD/RON, BTC/USD, doar daca stirea poate influenta clar cursul acelei perechi; altfel null. "market_sentiment" este directia probabila a perechii: "UP" = prima moneda se apreciaza fata de a doua, "DOWN" = se depreciaza, "NEUTRAL" = impact neclar (obligatoriu "NEUTRAL" cand affected_currency este null). "market_impact_note" este o singura propozitie (sub 25 de cuvinte) care explica impactul, sau null cand affected_currency este null. "impact_strength" este 1 (impact minor), 2 (moderat) sau 3 (major: decizii de dobanda ale bancilor centrale, date macro surpriza, crize, reglementari majore pentru cripto); null cand affected_currency este null. Foloseste 3 rar, doar pentru stiri care pot misca vizibil cursul in cateva ore.
+- "deep_dive" este o analiza completa in romana, de 150-220 de cuvinte, cu exact trei sectiuni, fiecare pe un rand nou, incepand cu titlul urmat de doua puncte: "Context:", "De ce conteaza:", "Ce urmeaza:". Explica stirea pentru un cititor roman (inclusiv relevanta pentru Romania sau UE, daca exista). Foloseste doar informatii din articol si cunostinte generale sigure; nu inventa cifre, nume sau citate; fara markdown.
 
 Articole:
 ${JSON.stringify(items)}`;
@@ -41,6 +43,8 @@ function applyDigest(article, parsed) {
   const deepDive = String(parsed.deep_dive || '').replace(/\*\*/g, '').trim();
   if (!summary || bullets.length < 2) return false;
 
+  const title = String(parsed.title || '').replace(/^["„“]+|["”“]+$/g, '').trim().slice(0, 200);
+  article.aiTitle = title || null;
   article.aiSummary = summary;
   article.aiBullets = bullets;
   article.aiTags = tags;
@@ -52,11 +56,14 @@ function applyDigest(article, parsed) {
     article.affectedCurrency = pair;
     article.marketSentiment = SENTIMENTS.includes(sentiment) ? sentiment : 'NEUTRAL';
     article.marketImpactNote = String(parsed.market_impact_note || '').trim().slice(0, 220) || null;
+    const strength = Number(parsed.impact_strength);
+    article.marketImpactStrength = [1, 2, 3].includes(strength) ? strength : null;
   } else {
     // „Analizat, fără impact”: NEUTRAL și fără pereche.
     article.affectedCurrency = null;
     article.marketSentiment = 'NEUTRAL';
     article.marketImpactNote = null;
+    article.marketImpactStrength = null;
   }
   article.aiProcessed = true;
   return true;

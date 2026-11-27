@@ -39,6 +39,7 @@ fun NewsArticle.toEntity(): NewsEntity = NewsEntity(
     isBookmarked = isBookmarked,
     userVote = userVote,
     fullContent = fullContent,
+    aiTitle = aiTitle,
     aiSummary = aiSummary,
     aiBullets = aiBullets.joinColumn(),
     aiTags = aiTags.joinColumn(),
@@ -46,6 +47,8 @@ fun NewsArticle.toEntity(): NewsEntity = NewsEntity(
     affectedCurrency = affectedCurrency,
     marketSentiment = marketSentiment?.name,
     marketImpactNote = marketImpactNote,
+    upvotes = upvotes,
+    downvotes = downvotes,
     cachedAt = System.currentTimeMillis()
 )
 
@@ -64,11 +67,14 @@ fun NewsEntity.toDomain(): NewsArticle = NewsArticle(
     isBookmarked = isBookmarked,
     userVote = userVote,
     fullContent = fullContent,
+    aiTitle = aiTitle,
     aiSummary = aiSummary,
     aiBullets = aiBullets.splitColumn(),
     aiTags = aiTags.splitColumn(),
     deepDive = deepDive,
     affectedCurrency = affectedCurrency,
     marketSentiment = MarketSentiment.fromRaw(marketSentiment),
-    marketImpactNote = marketImpactNote
+    marketImpactNote = marketImpactNote,
+    upvotes = upvotes,
+    downvotes = downvotes
 )

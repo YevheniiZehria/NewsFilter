@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -59,6 +60,7 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
+import ro.newsfilter.app.domain.model.CommunitySentiment
 import ro.newsfilter.app.domain.model.MarketEvent
 import ro.newsfilter.app.domain.model.MarketHistoryEvent
 import ro.newsfilter.app.domain.model.MarketPairs
@@ -80,7 +82,7 @@ private val WidgetShape = RoundedCornerShape(20.dp)
  *  - intervalele 1 Z · 5 Z · 1 L · 1 A · Max și graficul [MarketLineChart]: glisarea pe grafic
  *    actualizează în timp real cursul mare, data și convertorul;
  *  - convertorul [CurrencyConverter] cu butonul ⇅;
- *  - bannerul cu cea mai recentă știre care mișcă piața.
+ *  - bara Bullish / Bearish a comunității și bannerul cu cea mai recentă știre care mișcă piața.
  *
  * Aranjare adaptivă: pe telefon totul este pe o coloană; de la 600dp lățime, antetul și
  * convertorul stau în stânga, iar intervalele și graficul în dreapta.
@@ -149,6 +151,10 @@ fun MarketWidgetCard(
         )
     }
     val banner: @Composable () -> Unit = {
+        pulse.communitySentiment[widget.pair]
+            ?.let { if (widget.inverted) it.inverted() else it }
+            ?.takeIf { it.total > 0 }
+            ?.let { CommunitySentimentBar(sentiment = it, base = widget.from.code, modifier = Modifier.padding(top = 12.dp)) }
         pulse.latestEvent?.let { event ->
             EventBanner(event = event, onClick = { onEventClick(event) }, modifier = Modifier.padding(top = 12.dp))
         }
@@ -223,6 +229,50 @@ fun MarketWidgetCard(
                         "consultanță financiară. Impactul știrilor este estimat automat de AI."
                 )
             }
+        )
+    }
+}
+
+/**
+ * Bara Bullish / Bearish: proporția știrilor validate de cititori (upvotes > downvotes, ultimele
+ * 7 zile) care anunță aprecierea, respectiv deprecierea monedei [base].
+ */
+@Composable
+private fun CommunitySentimentBar(sentiment: CommunitySentiment, base: String, modifier: Modifier = Modifier) {
+    val bullishShare = sentiment.bullish.toFloat() / sentiment.total
+    val bullishPercent = Math.round(bullishShare * 100)
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                text = "Bullish $base $bullishPercent%",
+                style = MaterialTheme.typography.labelMedium,
+                color = trendColor(true)
+            )
+            Text(
+                text = "${100 - bullishPercent}% Bearish",
+                style = MaterialTheme.typography.labelMedium,
+                color = trendColor(false)
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .clip(CircleShape)
+        ) {
+            if (sentiment.bullish > 0) {
+                Spacer(modifier = Modifier.weight(sentiment.bullish.toFloat()).fillMaxHeight().background(trendColor(true)))
+            }
+            if (sentiment.bearish > 0) {
+                Spacer(modifier = Modifier.weight(sentiment.bearish.toFloat()).fillMaxHeight().background(trendColor(false)))
+            }
+        }
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Sentimentul cititorilor · ${sentiment.total} " + if (sentiment.total == 1) "știre votată" else "știri votate",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }

@@ -99,7 +99,7 @@ import ro.newsfilter.app.ui.components.ReadTimeLabel
  *    butoane circulare translucide: „Înapoi” (stânga) și „Distribuie” (dreapta);
  *  - pastila de categorie, titlu mare, rând de metadate (sursă • timp de citire);
  *  - rezumatul AI cu spațiere aerisită (lineHeight 26.sp);
- *  - CTA principal „Citește articolul original” → Chrome Custom Tabs (performanță
+ *  - CTA principal „Citește articolul original” (sursa în engleză) → Chrome Custom Tabs (performanță
  *    nativă Chrome, cookie-urile utilizatorului, fără WebView propriu), cu fallback
  *    la ACTION_VIEW dacă nu există un browser compatibil;
  *  - bară de acțiuni jos: Like / Dislike (feedback instant + vot salvat în Firestore, votul
@@ -135,8 +135,8 @@ fun DetailScreen(
                     isBookmarked = article.isBookmarked,
                     feedbackPositive = uiState.feedbackPositive,
                     isFeedbackSent = uiState.isFeedbackSent,
-                    onLike = { viewModel.sendFeedback(isPositive = true) },
-                    onDislike = { viewModel.sendFeedback(isPositive = false) },
+                    onLike = { viewModel.vote(isPositive = true) },
+                    onDislike = { viewModel.vote(isPositive = false) },
                     onBookmark = viewModel::toggleBookmark
                 )
             }
@@ -189,7 +189,7 @@ fun DetailScreen(
                     FloatingIconButton(
                         icon = Icons.Filled.Share,
                         description = "Distribuie articolul",
-                        onClick = { ArticleIntents.share(context, article.title, article.articleUrl) }
+                        onClick = { ArticleIntents.share(context, article.displayTitle, article.articleUrl) }
                     )
                 }
             }
@@ -241,7 +241,7 @@ private fun ArticleContent(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Text(
-                    text = article.title,
+                    text = article.displayTitle,
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -273,6 +273,22 @@ private fun ArticleContent(
                     )
                 }
 
+                // Voturile comunității (afișate de la 3 voturi în sus).
+                article.usefulPercent?.let { percent ->
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            text = "👍 $percent% dintre cititori consideră această știre utilă",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(20.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 Spacer(modifier = Modifier.height(20.dp))
@@ -283,8 +299,8 @@ private fun ArticleContent(
                     Spacer(modifier = Modifier.height(20.dp))
                 }
 
-                val hasAiSummary = !article.aiSummary.isNullOrBlank()
-                val displaySummary = article.aiSummary?.takeIf { it.isNotBlank() } ?: article.summary
+                val hasAiSummary = article.isAiProcessed
+                val displaySummary = article.displaySummary
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (hasAiSummary) {
@@ -297,7 +313,7 @@ private fun ArticleContent(
                         Spacer(modifier = Modifier.width(6.dp))
                     }
                     Text(
-                        text = if (hasAiSummary) "REZUMAT AI" else "REZUMAT",
+                        text = if (hasAiSummary) "REZUMAT AI" else "TEXT ORIGINAL (EN) · rezumatul în română se generează",
                         style = MaterialTheme.typography.labelMedium,
                         color = if (hasAiSummary) {
                             MaterialTheme.colorScheme.primary
@@ -408,6 +424,18 @@ private fun ArticleContent(
                         modifier = Modifier.size(18.dp)
                     )
                 }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    // Știrile locale (Google News) sunt deja în română; restul vin din feed-urile BBC.
+                    text = if (article.category == Category.LOCAL.slug) {
+                        "Sursa originală · ${article.source.ifBlank { "Google News" }}"
+                    } else {
+                        "Sursa originală, în engleză · ${article.source.ifBlank { "BBC" }}"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.CenterHorizontally)
+                )
 
                 Spacer(modifier = Modifier.height(8.dp))
             }
@@ -437,7 +465,8 @@ private fun FloatingIconButton(
 
 /**
  * Bara de acțiuni de jos: „Îmi place” / „Nu-mi place” (feedback de relevanță)
- * și „Salvează”. Starea se schimbă instantaneu (culoare animată + mic „pop”).
+ * și „Salvează”. Starea se schimbă instantaneu (culoare animată + mic „pop”); aceeași apăsare
+ * retrage votul, celălalt buton îl schimbă.
  */
 @Composable
 private fun DetailActionBar(
@@ -463,7 +492,7 @@ private fun DetailActionBar(
                     icon = if (feedbackPositive == true) Icons.Filled.ThumbUp else Icons.Outlined.ThumbUp,
                     description = "Îmi place",
                     selected = feedbackPositive == true,
-                    enabled = !isFeedbackSent,
+                    enabled = true,
                     selectedColor = MaterialTheme.colorScheme.primary,
                     onClick = onLike
                 )
@@ -471,7 +500,7 @@ private fun DetailActionBar(
                     icon = if (feedbackPositive == false) Icons.Filled.ThumbDown else Icons.Outlined.ThumbDown,
                     description = "Nu-mi place",
                     selected = feedbackPositive == false,
-                    enabled = !isFeedbackSent,
+                    enabled = true,
                     selectedColor = MaterialTheme.colorScheme.error,
                     onClick = onDislike
                 )

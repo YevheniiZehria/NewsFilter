@@ -42,11 +42,15 @@ interface NewsRepository {
      */
     suspend fun requestDeepDive(articleId: String): String
 
-    /** Salvează votul (like/dislike) în `users/{uid}/votes`. Best effort, nu aruncă. */
-    suspend fun sendFeedback(articleId: String, isPositive: Boolean)
+    /**
+     * Votul utilizatorului (true = util, false = nu, null = retras): local imediat (Room, inclusiv
+     * contoarele comunității), apoi în Firestore — votul + contoarele articolului într-un singur batch.
+     * @return true dacă Firestore a confirmat; false dacă nu (starea locală revine la votul anterior).
+     */
+    suspend fun setVote(articleId: String, isPositive: Boolean?): Boolean
 
-    /** Salvează local votul, ca starea Like / Dislike să fie reținută la redeschidere. */
-    suspend fun setUserVote(articleId: String, isPositive: Boolean?)
+    /** „Trending azi”: știrile de azi din cache, sortate după voturile pozitive, filtrate după [query]. */
+    fun observeTrending(query: String = ""): Flow<List<NewsArticle>>
 
     suspend fun markAsRead(articleId: String)
 

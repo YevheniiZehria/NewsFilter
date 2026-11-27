@@ -59,6 +59,10 @@ data class NewsEntity(
     @ColumnInfo(name = "full_content")
     val fullContent: String? = null,
 
+    /** Titlul tradus în română de AI (Gemini); null = se afișează titlul original. */
+    @ColumnInfo(name = "ai_title")
+    val aiTitle: String? = null,
+
     /**
      * Rezumatul generat de AI (Gemini) în română.
      * Null dacă generarea AI nu a rulat încă pentru acest articol.
@@ -89,6 +93,13 @@ data class NewsEntity(
 
     @ColumnInfo(name = "market_impact_note")
     val marketImpactNote: String? = null,
+
+    /** Voturile comunității (contoarele din Firestore; actualizate optimist la votul propriu). */
+    @ColumnInfo(name = "upvotes", defaultValue = "0")
+    val upvotes: Int = 0,
+
+    @ColumnInfo(name = "downvotes", defaultValue = "0")
+    val downvotes: Int = 0,
 
     @ColumnInfo(name = "cached_at")
     val cachedAt: Long = System.currentTimeMillis()

@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Logout
@@ -42,6 +43,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -81,6 +83,9 @@ import ro.newsfilter.app.ui.components.ErrorView
 import ro.newsfilter.app.ui.components.HeroNewsCard
 import ro.newsfilter.app.ui.components.LoadingShimmer
 import ro.newsfilter.app.ui.components.MarketWidgetCard
+import ro.newsfilter.app.core.notifications.DeepLink
+import ro.newsfilter.app.core.notifications.DeepLinks
+import ro.newsfilter.app.domain.model.MarketPairs
 import ro.newsfilter.app.ui.components.OfflineBanner
 import ro.newsfilter.app.ui.components.ScreenHeader
 import ro.newsfilter.app.ui.components.StatusView
@@ -95,7 +100,8 @@ import java.util.Locale
  *  1. Antet minimalist: salut în funcție de oră + data curentă în română;
  *  2. Selectorul de buget de timp (pastilă 2 / 5 / 15 min);
  *  3. Rezumatul bugetului: badge „3 articole • 4 din 5 min” + bară de progres;
- *  4. Bara de căutare (filtrare în timp real) + chip-urile „Toate” / „📍 Oraș” (știri locale);
+ *  4. Bara de căutare (filtrare în timp real) + chip-urile „Toate” / „🔥 Trending azi” (știrile de
+ *     azi cele mai votate) / „📍 Oraș” (știri locale);
  *  5. Primul articol ca card Hero, restul ca carduri compacte.
  *
  * Evenimente UI:
@@ -164,6 +170,18 @@ fun FeedScreen(
         }
     }
 
+    // Alertă de curs atinsă (FCM): widget-ul trece pe perechea din notificare și e adus în vizor.
+    val listState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        DeepLinks.pending.collect { link ->
+            if (link is DeepLink.MarketPair) {
+                DeepLinks.consume(link)
+                MarketPairs.normalize(link.pair)?.let { viewModel.selectMarketPair(it) }
+                listState.animateScrollToItem(0)
+            }
+        }
+    }
+
     // Senzor: scutură telefonul pentru un pachet nou (activ doar cât ecranul e vizibil)
     ShakeToRefreshEffect(enabled = uiState.shakeToRefreshEnabled) {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -176,7 +194,7 @@ fun FeedScreen(
     val contentState = when {
         uiState.isLoading -> FeedContent.Loading
         isSearching && uiState.articles.isEmpty() -> FeedContent.NoResults
-        uiState.localOnly && uiState.articles.isEmpty() -> FeedContent.Empty
+        (uiState.localOnly || uiState.trendingOnly) && uiState.articles.isEmpty() -> FeedContent.Empty
         uiState.error != null && uiState.articles.isEmpty() -> FeedContent.Error
         uiState.articles.isEmpty() -> FeedContent.Empty
         else -> FeedContent.List
@@ -196,6 +214,7 @@ fun FeedScreen(
                 modifier = Modifier.fillMaxSize()
             ) {
                 LazyColumn(
+                    state = listState,
                     contentPadding = PaddingValues(bottom = 88.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier.fillMaxSize()
@@ -235,10 +254,12 @@ fun FeedScreen(
                     }
                     item(key = "filters") {
                         FeedFilterChips(
+                            trendingOnly = uiState.trendingOnly,
                             localOnly = uiState.localOnly,
                             localLabel = uiState.localLabel,
                             hasLocalNews = uiState.hasLocalNews,
-                            onSelectAll = { viewModel.selectLocal(false) },
+                            onSelectAll = viewModel::selectAll,
+                            onToggleTrending = viewModel::toggleTrending,
                             onSelectLocal = {
                                 if (uiState.hasLocalNews) viewModel.selectLocal(true) else onOpenSettings()
                             }
@@ -303,10 +324,16 @@ fun FeedScreen(
                         FeedContent.Empty -> item(key = "empty") {
                             StatusView(
                                 icon = if (uiState.localOnly) Icons.Outlined.LocationOn else Icons.Outlined.DoneAll,
-                                title = if (uiState.localOnly) "Nicio știre locală" else "Ești la zi!",
+                                title = when {
+                                    uiState.localOnly -> "Nicio știre locală"
+                                    uiState.trendingOnly -> "Nimic în trending încă"
+                                    else -> "Ești la zi!"
+                                },
                                 message = if (uiState.localOnly) {
                                     "Nu am găsit știri locale pentru ${uiState.localLabel}. " +
                                         "Verifică orașul din Setări sau reîmprospătează."
+                                } else if (uiState.trendingOnly) {
+                                    "Nicio știre de azi nu a primit încă voturi. Votează 👍 știrile utile din ecranul articolului."
                                 } else {
                                     "Nu am găsit știri noi pentru preferințele tale. " +
                                         "Adaugă mai multe domenii din Setări sau reîmprospătează."
@@ -333,6 +360,7 @@ fun FeedScreen(
                                         text = when {
                                             isSearching -> "Rezultatele căutării"
                                             uiState.localOnly -> "Știri din ${uiState.localLabel}"
+                                            uiState.trendingOnly -> "Cele mai votate azi"
                                             else -> "Cele mai recente știri"
                                         },
                                         style = MaterialTheme.typography.titleSmall,
@@ -350,7 +378,7 @@ fun FeedScreen(
                                 Column(modifier = itemModifier) {
                                     if (index == 1) {
                                         Text(
-                                            text = "Mai multe știri recente",
+                                            text = if (uiState.trendingOnly) "Tot în trending" else "Mai multe știri recente",
                                             style = MaterialTheme.typography.titleSmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                                             modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 12.dp)
@@ -409,7 +437,7 @@ fun FeedScreen(
             onDismiss = { menuArticle = null },
             onToggleBookmark = viewModel::toggleBookmarkFromMenu,
             onMarkAsRead = { viewModel.markAsReadFromMenu(it.id) },
-            onShare = { ArticleIntents.share(context, it.title, it.articleUrl) },
+            onShare = { ArticleIntents.share(context, it.displayTitle, it.articleUrl) },
             onOpenInBrowser = { ArticleIntents.openInBrowser(context, it.articleUrl, toolbarColor) }
         )
     }
@@ -523,13 +551,18 @@ private fun FeedSearchBar(
     )
 }
 
-/** Chip-urile „Toate” / „📍 Oraș”; fără locație setată, chip-ul local deschide Setările. */
+/**
+ * Chip-urile „Toate” / „🔥 Trending azi” / „📍 Oraș” (unul singur activ);
+ * fără locație setată, chip-ul local deschide Setările.
+ */
 @Composable
 private fun FeedFilterChips(
+    trendingOnly: Boolean,
     localOnly: Boolean,
     localLabel: String,
     hasLocalNews: Boolean,
     onSelectAll: () -> Unit,
+    onToggleTrending: () -> Unit,
     onSelectLocal: () -> Unit
 ) {
     val colors = FilterChipDefaults.filterChipColors(
@@ -544,9 +577,16 @@ private fun FeedFilterChips(
             .padding(horizontal = 16.dp)
     ) {
         FilterChip(
-            selected = !localOnly,
+            selected = !localOnly && !trendingOnly,
             onClick = onSelectAll,
             label = { Text("Toate") },
+            shape = CircleShape,
+            colors = colors
+        )
+        FilterChip(
+            selected = trendingOnly,
+            onClick = onToggleTrending,
+            label = { Text("🔥 Trending azi") },
             shape = CircleShape,
             colors = colors
         )

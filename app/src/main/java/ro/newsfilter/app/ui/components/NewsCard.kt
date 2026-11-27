@@ -62,6 +62,9 @@ import ro.newsfilter.app.domain.model.MarketSentiment
 import ro.newsfilter.app.domain.model.NewsArticle
 
 private val HeroShape = RoundedCornerShape(20.dp)
+
+/** Indicator pentru articolele încă neprocesate de AI (titlu / rezumat în engleză). */
+private const val UNTRANSLATED_LABEL = "EN · traducere în curs"
 private val CompactShape = RoundedCornerShape(16.dp)
 private val ThumbnailShape = RoundedCornerShape(14.dp)
 
@@ -111,15 +114,23 @@ fun HeroNewsCard(
 
         Column(modifier = Modifier.padding(start = 18.dp, end = 18.dp, top = 16.dp)) {
             Text(
-                text = article.title,
+                text = article.displayTitle,
                 style = MaterialTheme.typography.titleLarge,
                 color = titleColor(article),
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
+            if (article.needsTranslation) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = UNTRANSLATED_LABEL,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+            }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = article.summary,
+                text = article.displaySummary,
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 2,
@@ -180,7 +191,7 @@ fun CompactNewsCard(
                         maxLines = 1
                     )
                     Text(
-                        text = "  •  ${article.source}",
+                        text = "  •  ${article.source}" + if (article.needsTranslation) "  •  $UNTRANSLATED_LABEL" else "",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -189,7 +200,7 @@ fun CompactNewsCard(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = article.title,
+                    text = article.displayTitle,
                     style = MaterialTheme.typography.titleMedium,
                     color = titleColor(article),
                     maxLines = 2,

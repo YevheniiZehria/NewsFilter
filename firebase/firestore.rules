@@ -9,7 +9,44 @@ service cloud.firestore {
 
     match /articles/{articleId} {
       allow read: if request.auth != null;
-      allow write: if false;
+      // Singura scriere din aplicație: contoarele de voturi, în același batch cu
+      // users/{uid}/votes/{articleId}. Fiecare contor se schimbă exact cu tranziția votului.
+      allow update: if request.auth != null && validVoteUpdate(articleId);
+      allow create, delete: if false;
+    }
+
+    function votePath(articleId) {
+      return /databases/$(database)/documents/users/$(request.auth.uid)/votes/$(articleId);
+    }
+
+    function counterDelta(field) {
+      return request.resource.data.get(field, 0) - resource.data.get(field, 0);
+    }
+
+    // delta == (după ? 1 : 0) - (înainte ? 1 : 0)
+    function deltaMatches(delta, before, after) {
+      return (delta == 1 && after && !before)
+          || (delta == -1 && before && !after)
+          || (delta == 0 && before == after);
+    }
+
+    function validVoteUpdate(articleId) {
+      let p = votePath(articleId);
+      let had = exists(p);
+      let has = existsAfter(p);
+      let upBefore = had && get(p).data.positive == true;
+      let downBefore = had && get(p).data.positive == false;
+      let upAfter = has && getAfter(p).data.positive == true;
+      let downAfter = has && getAfter(p).data.positive == false;
+      let du = counterDelta('upvotes');
+      let dd = counterDelta('downvotes');
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['upvotes', 'downvotes', 'updatedAt'])
+          && request.resource.data.updatedAt == request.time
+          && (du != 0 || dd != 0)
+          && request.resource.data.get('upvotes', 0) >= 0
+          && request.resource.data.get('downvotes', 0) >= 0
+          && deltaMatches(du, upBefore, upAfter)
+          && deltaMatches(dd, downBefore, downAfter);
     }
 
     match /market/{docId} {
@@ -25,8 +62,17 @@ service cloud.firestore {
     match /users/{uid} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
 
-      match /{document=**} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+      // Voturile: doar în același batch cu actualizarea contoarelor articolului (verificată mai sus),
+      // altfel s-ar putea șterge / rescrie votul fără a corecta contoarele.
+      match /votes/{articleId} {
+        allow read: if request.auth != null && request.auth.uid == uid;
+        allow write: if request.auth != null && request.auth.uid == uid
+          && getAfter(/databases/$(database)/documents/articles/$(articleId)).data.updatedAt == request.time
+          && (request.resource == null || request.resource.data.positive is bool);
+      }
+
+      match /{collection}/{document=**} {
+        allow read, write: if request.auth != null && request.auth.uid == uid && collection != 'votes';
       }
     }
 

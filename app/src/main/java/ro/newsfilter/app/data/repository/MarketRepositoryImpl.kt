@@ -12,6 +12,7 @@ import ro.newsfilter.app.data.local.entity.NewsEntity
 import ro.newsfilter.app.data.remote.firestore.FirestorePaths
 import ro.newsfilter.app.data.remote.firestore.toMarketPoints
 import ro.newsfilter.app.data.remote.firestore.toMarketRates
+import ro.newsfilter.app.domain.model.CommunitySentiment
 import ro.newsfilter.app.domain.model.MarketEvent
 import ro.newsfilter.app.domain.model.MarketHistory
 import ro.newsfilter.app.domain.model.MarketHistoryEvent
@@ -23,6 +24,7 @@ import ro.newsfilter.app.domain.model.MarketRate
 import ro.newsfilter.app.domain.model.MarketSentiment
 import ro.newsfilter.app.domain.repository.MarketRepository
 import java.io.IOException
+import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
@@ -55,8 +57,21 @@ class MarketRepositoryImpl @Inject constructor(
     private val historyCache = ConcurrentHashMap<String, MarketHistory>()
 
     override fun observeMarketPulse(): Flow<MarketPulse> =
-        combine(observeRates(), newsDao.observeLatestMarketEvent()) { rates, latest ->
-            MarketPulse(rates = rates, latestEvent = latest?.toMarketEventOrNull())
+        combine(
+            observeRates(),
+            newsDao.observeLatestMarketEvent(),
+            newsDao.observeCommunitySentiment(Instant.now().minus(SENTIMENT_WINDOW).toString())
+        ) { rates, latest, counts ->
+            MarketPulse(
+                rates = rates,
+                latestEvent = latest?.toMarketEventOrNull(),
+                communitySentiment = counts.groupBy { it.pair }.mapValues { (_, rows) ->
+                    CommunitySentiment(
+                        bullish = rows.filter { it.sentiment == MarketSentiment.UP.name }.sumOf { it.count },
+                        bearish = rows.filter { it.sentiment == MarketSentiment.DOWN.name }.sumOf { it.count }
+                    )
+                }
+            )
         }
 
     private fun observeRates(): Flow<List<MarketRate>> = callbackFlow {
@@ -171,6 +186,9 @@ class MarketRepositoryImpl @Inject constructor(
         const val LATEST_EVENT_WINDOW_MS = 48 * HOUR_MS
         const val MAX_EVENTS = 30
         const val MAX_EVENT_CANDIDATES = 200
+
+        /** Fereastra pentru sentimentul comunității (articolele trăiesc oricum max. 14 zile). */
+        val SENTIMENT_WINDOW: Duration = Duration.ofDays(7)
 
         /** Luni, 2000-01-03 00:00 UTC — originea găleților (ca în vechiul API: săptămânile încep lunea). */
         const val BUCKET_ORIGIN_MS = 946_857_600_000L

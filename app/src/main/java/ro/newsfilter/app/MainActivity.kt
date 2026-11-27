@@ -7,6 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.app.ActivityOptionsCompat
 import dagger.hilt.android.AndroidEntryPoint
+import ro.newsfilter.app.core.notifications.DeepLinks
 import ro.newsfilter.app.ui.NewsFilterAppContent
 
 /**
@@ -30,9 +31,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Deschis dintr-o alertă de piață: destinația e consumată de navigarea Compose.
+        if (savedInstanceState == null) DeepLinks.handle(intent)
         setContent {
             NewsFilterAppContent(onSessionEnded = ::openAuthActivity)
         }
+    }
+
+    /** Activity-ul era deja deschis (FLAG_ACTIVITY_SINGLE_TOP) → o nouă alertă atinsă. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        DeepLinks.handle(intent)
     }
 
     /** Revine la ecranul de autentificare și golește back stack-ul. */

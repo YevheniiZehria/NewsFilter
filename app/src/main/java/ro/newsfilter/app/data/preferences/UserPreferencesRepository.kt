@@ -33,6 +33,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(
  * @property isDarkTheme Temă întunecată activată
  * @property onboardingCompleted Dacă onboarding-ul a fost parcurs
  * @property dailyNotificationEnabled Notificarea zilnică activată
+ * @property marketAlertsEnabled Alertele de piață (push FCM, topicul `market_alerts`)
  * @property notificationHour Ora notificării zilnice (0-23)
  * @property notificationMinute Minutul notificării zilnice (0-59)
  * @property shakeToRefreshEnabled „Scutură pentru știri noi” (senzorul accelerometru)
@@ -49,6 +50,7 @@ data class UserPreferences(
     val isDarkTheme: Boolean = false,
     val onboardingCompleted: Boolean = false,
     val dailyNotificationEnabled: Boolean = false,
+    val marketAlertsEnabled: Boolean = false,
     val notificationHour: Int = 8,
     val notificationMinute: Int = 0,
     val shakeToRefreshEnabled: Boolean = true,
@@ -80,6 +82,7 @@ class UserPreferencesRepository @Inject constructor(
         val IS_DARK_THEME = booleanPreferencesKey("is_dark_theme")
         val ONBOARDING_COMPLETED = booleanPreferencesKey("onboarding_completed")
         val DAILY_NOTIFICATION_ENABLED = booleanPreferencesKey("daily_notification_enabled")
+        val MARKET_ALERTS_ENABLED = booleanPreferencesKey("market_alerts_enabled")
         val NOTIFICATION_HOUR = intPreferencesKey("notification_hour")
         val NOTIFICATION_MINUTE = intPreferencesKey("notification_minute")
         val SHAKE_TO_REFRESH = booleanPreferencesKey("shake_to_refresh")
@@ -114,6 +117,7 @@ class UserPreferencesRepository @Inject constructor(
             isDarkTheme = prefs[Keys.IS_DARK_THEME] ?: false,
             onboardingCompleted = prefs[Keys.ONBOARDING_COMPLETED] ?: false,
             dailyNotificationEnabled = prefs[Keys.DAILY_NOTIFICATION_ENABLED] ?: false,
+            marketAlertsEnabled = prefs[Keys.MARKET_ALERTS_ENABLED] ?: false,
             notificationHour = prefs[Keys.NOTIFICATION_HOUR] ?: 8,
             notificationMinute = prefs[Keys.NOTIFICATION_MINUTE] ?: 0,
             shakeToRefreshEnabled = prefs[Keys.SHAKE_TO_REFRESH] ?: true,
@@ -171,6 +175,12 @@ class UserPreferencesRepository @Inject constructor(
     }
 
     /** Activează/dezactivează „Scutură pentru știri noi”. */
+    suspend fun updateMarketAlerts(enabled: Boolean) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.MARKET_ALERTS_ENABLED] = enabled
+        }
+    }
+
     suspend fun updateShakeToRefresh(enabled: Boolean) {
         context.dataStore.edit { prefs ->
             prefs[Keys.SHAKE_TO_REFRESH] = enabled

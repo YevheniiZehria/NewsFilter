@@ -10,6 +10,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import android.util.Log
+import kotlinx.coroutines.CancellationException
+import ro.newsfilter.app.core.notifications.MarketAlerts
 import ro.newsfilter.app.data.preferences.UserPreferences
 import ro.newsfilter.app.data.preferences.UserPreferencesRepository
 import ro.newsfilter.app.core.sensor.ShakeDetector
@@ -91,6 +94,25 @@ class SettingsViewModel @Inject constructor(
                 NotificationScheduler.scheduleDailyNotification(context, hour, minute)
             } else {
                 NotificationScheduler.cancelDailyNotification(context)
+            }
+        }
+    }
+
+    /**
+     * Alertele de piață: preferința locală + abonarea la topicul FCM `market_alerts`.
+     * Dacă FCM nu răspunde (ex. offline), preferința revine la valoarea anterioară.
+     */
+    fun setMarketAlerts(enabled: Boolean, onFailure: () -> Unit = {}) {
+        viewModelScope.launch {
+            preferencesRepository.updateMarketAlerts(enabled)
+            try {
+                MarketAlerts.setSubscribed(enabled)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w("SettingsViewModel", "Abonarea la alertele de piață a eșuat: ${e.message}")
+                preferencesRepository.updateMarketAlerts(!enabled)
+                onFailure()
             }
         }
     }

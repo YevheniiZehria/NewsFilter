@@ -56,6 +56,15 @@ class NewsFilterApp : Application(), Configuration.Provider {
             }
             notificationManager.createNotificationChannel(dailyChannel)
 
+            val marketChannel = NotificationChannel(
+                MARKET_CHANNEL_ID,
+                getString(R.string.channel_name_market),
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = getString(R.string.channel_desc_market)
+            }
+            notificationManager.createNotificationChannel(marketChannel)
+
             val audioChannel = NotificationChannel(
                 AUDIO_CHANNEL_ID,
                 getString(R.string.channel_name_audio),
@@ -71,6 +80,7 @@ class NewsFilterApp : Application(), Configuration.Provider {
     companion object {
         const val NOTIFICATION_CHANNEL_ID = "daily_news_channel"
         const val AUDIO_CHANNEL_ID = "audio_playback_channel"
+        const val MARKET_CHANNEL_ID = "market_alerts_channel"
     }
 }
 
